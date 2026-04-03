@@ -8,7 +8,19 @@ import os
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, session
 import joblib
+# app.py (Top of file)
+import os
+from functools import wraps
+from flask import Flask, request, jsonify, render_template, session
+import joblib
 
+# ... existing imports ...
+from user_manager import (
+    register_user, authenticate_user,
+    add_to_watch_history, remove_from_watch_history, get_watch_history,
+    update_rating
+)
+from data_logger import log_user_interaction  # <-- NEW IMPORT
 from config import (
     MODEL_DIR, FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY, TOP_K,
     RATING_SCALE_MAX, MIN_LANGUAGE_COUNT
@@ -163,6 +175,21 @@ def api_add_history():
     if not ok:
         return jsonify({"error": msg}), 400
 
+    ok, msg = add_to_watch_history(
+        session["username"], movie_index, movie_title, release_year, rating
+    )
+    if not ok:
+        return jsonify({"error": msg}), 400
+
+    # <-- ADD THE FOLLOWING BLOCK -->
+    if rating is not None:
+        try:
+            log_user_interaction(session["username"], movie_index, rating)
+        except Exception as e:
+            print(f"Data logging failed for user {session['username']}: {e}")
+    # <----------------------------->
+
+    
     return jsonify({"message": msg})
 
 
@@ -173,16 +200,23 @@ def api_update_rating(movie_index):
     if not data or "rating" not in data:
         return jsonify({"error": "rating required"}), 400
 
+    # Ensure the variable is explicitly defined from the payload
     rating = data["rating"]
+    
     if not isinstance(rating, (int, float)) or rating < 1 or rating > RATING_SCALE_MAX:
         return jsonify({"error": f"Rating must be between 1 and {RATING_SCALE_MAX}"}), 400
 
     ok, msg = update_rating(session["username"], movie_index, rating)
     if not ok:
         return jsonify({"error": msg}), 400
+
+    # Execute Supabase logging
+    try:
+        log_user_interaction(session["username"], movie_index, rating)
+    except Exception as e:
+        print(f"Data logging failed for user {session['username']}: {e}")
+
     return jsonify({"message": msg})
-
-
 @app.route("/api/history/<int:movie_index>", methods=["DELETE"])
 @login_required
 def api_remove_history(movie_index):
@@ -240,21 +274,6 @@ def search_movies():
 def recommend():
     """
     Generate recommendations based on selected movies + user history.
-
-    Request body:
-      {
-        "movies": [{"index": 0, "title": "...", "release_year": 2020, "rating": 4}],
-        "top_k": 10,
-        "language": "en",         // optional language filter
-        "genres": ["Action"]      // optional genre filters
-      }
-
-    NEW behaviours:
-      1. If the user is logged in, each selected movie is automatically added to
-         their watch history (with the rating if provided).
-      2. Movies that were added without a rating are returned in `rating_prompts`
-         so the frontend can ask the user to rate them.
-      3. language filter is forwarded to the engine.
     """
     data = request.get_json()
     if not data or "movies" not in data:
@@ -262,7 +281,7 @@ def recommend():
 
     selected_movies = data["movies"]
     top_k           = data.get("top_k", TOP_K)
-    language        = data.get("language", "").strip()   # NEW
+    language        = data.get("language", "").strip()
     genres          = _parse_genre_filters(data.get("genres", []))
 
     if not selected_movies:
@@ -280,15 +299,15 @@ def recommend():
             if not isinstance(rating, (int, float)) or rating < 1 or rating > RATING_SCALE_MAX:
                 return jsonify({"error": f"Movie ratings must be between 1 and {RATING_SCALE_MAX}"}), 400
 
-    # ── NEW: Auto-mark selected movies as watched ──────────────────────────
-    rating_prompts = []          # Movies that still need a rating from the user
+    # ── Auto-mark selected movies as watched and log interactions ────────
+    # (Removed the rating_prompts list to prevent the double-asking UI bug)
     if "username" in session:
         for movie in selected_movies:
             idx          = movie["index"]
             row          = engine.tmdb_df.iloc[idx]
             movie_title  = row["title"]
             release_year = int(row["release_year"])
-            rating       = movie.get("rating")          # May be None
+            rating       = movie.get("rating")
 
             ok, _ = add_to_watch_history(
                 session["username"],
@@ -297,6 +316,107 @@ def recommend():
                 release_year,
                 rating,
             )
+
+            # --- DATA LOGGING INTEGRATION ---
+            if ok and rating is not None:
+                try:
+                    log_user_interaction(session["username"], idx, rating)
+                except Exception as e:
+                    print(f"Data logging failed for user {session['username']}: {e}")
+            # --------------------------------
+    # ──────────────────────────────────────────────────────────────────────
+
+    # Load user watch history for the engine
+    watch_history = None
+    if "username" in session:
+        watch_history = get_watch_history(session["username"])
+
+    try:
+        recs_df, weight_info = engine.recommend(
+            selected_movies,
+            top_k=top_k,
+            watch_history=watch_history,
+            language_filter=language if language else None,
+            genre_filters=genres,
+        )
+
+        recommendations = recs_df.to_dict(orient="records")
+
+        # Convert genre lists to strings for display
+        for rec in recommendations:
+            if isinstance(rec["genres"], list):
+                rec["genres"] = ", ".join(rec["genres"])
+
+        return jsonify({
+            "recommendations": recommendations,
+            "weight_info":     weight_info,
+            "rating_prompts":  [],      # Hardcoded to empty so frontend doesn't prompt again
+            "auto_watched":    False,   # Disabled to stop the second popup
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    """
+    Generate recommendations based on selected movies + user history.
+
+    Request body:
+      {
+        "movies": [{"index": 0, "title": "...", "release_year": 2020, "rating": 4}],
+        "top_k": 10,
+        "language": "en",         # optional language filter
+        "genres": ["Action"]      # optional genre filters
+      }
+    """
+    data = request.get_json()
+    if not data or "movies" not in data:
+        return jsonify({"error": "No movies provided"}), 400
+
+    selected_movies = data["movies"]
+    top_k           = data.get("top_k", TOP_K)
+    language        = data.get("language", "").strip()
+    genres          = _parse_genre_filters(data.get("genres", []))
+
+    if not selected_movies:
+        return jsonify({"error": "Please select at least one movie"}), 400
+
+    # Validate movie indices
+    for movie in selected_movies:
+        if "index" not in movie:
+            return jsonify({"error": "Each movie must have an 'index' field"}), 400
+        idx = movie["index"]
+        if not isinstance(idx, int) or idx < 0 or idx >= len(engine.tmdb_df):
+            return jsonify({"error": f"Invalid movie index: {idx}"}), 400
+        rating = movie.get("rating")
+        if rating is not None:
+            if not isinstance(rating, (int, float)) or rating < 1 or rating > RATING_SCALE_MAX:
+                return jsonify({"error": f"Movie ratings must be between 1 and {RATING_SCALE_MAX}"}), 400
+
+    # ── NEW: Auto-mark selected movies as watched and log interactions ────────
+    rating_prompts = []          
+    if "username" in session:
+        for movie in selected_movies:
+            idx          = movie["index"]
+            row          = engine.tmdb_df.iloc[idx]
+            movie_title  = row["title"]
+            release_year = int(row["release_year"])
+            rating       = movie.get("rating")
+
+            ok, _ = add_to_watch_history(
+                session["username"],
+                idx,
+                movie_title,
+                release_year,
+                rating,
+            )
+
+            # --- DATA LOGGING INTEGRATION ---
+            if ok and rating is not None:
+                try:
+                    log_user_interaction(session["username"], idx, rating)
+                except Exception as e:
+                    # Non-blocking error handling to ensure API continuity
+                    print(f"Data logging failed for user {session['username']}: {e}")
+            # --------------------------------
 
             # Collect movies that have no rating yet so the frontend can prompt
             if ok and (rating is None):
@@ -317,7 +437,7 @@ def recommend():
             selected_movies,
             top_k=top_k,
             watch_history=watch_history,
-            language_filter=language if language else None,  # NEW
+            language_filter=language if language else None,
             genre_filters=genres,
         )
 
@@ -331,14 +451,12 @@ def recommend():
         return jsonify({
             "recommendations": recommendations,
             "weight_info":     weight_info,
-            "rating_prompts":  rating_prompts,   # NEW — frontend should ask ratings
-            "auto_watched":    len(rating_prompts) > 0,  # convenience flag
+            "rating_prompts":  rating_prompts, 
+            "auto_watched":    len(rating_prompts) > 0,
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 # ──────────────────────────── Stats ────────────────────────────
 
 @app.route("/api/stats", methods=["GET"])
