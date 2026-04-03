@@ -1,9 +1,11 @@
-"""
-Flask web application for the hybrid movie recommendation system.
-Provides API endpoints and serves the frontend.
-Includes user authentication, watch history, and language filtering.
-"""
+
+import os
+from flask import Flask, request, jsonify
+# ... any other standard imports ...
+
+# 1. THIS IMPORT MUST BE AT THE TOP
 from recommendation_engine import RecommendationEngine
+
 import logging
 import traceback
 
@@ -14,12 +16,16 @@ engine = None
 
 try:
     logger.info("Initiating Hybrid Recommendation Engine...")
-    # Replace the following line with your actual initialization call
+    
+    # 2. THIS MUST COME AFTER THE IMPORT
     engine = RecommendationEngine(dataset_path="data/tmdb_movies.csv")
+    
     logger.info("Engine instantiated successfully.")
 except Exception as e:
     logger.error("FATAL: Engine initialization failed.")
     logger.error(traceback.format_exc())
+
+# ... rest of your Flask app code ...
 import os
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, session
