@@ -1,13 +1,8 @@
-
-import os
-from flask import Flask, request, jsonify
-# ... any other standard imports ...
-
-# 1. THIS IMPORT MUST BE AT THE TOP
-from recommendation_engine import RecommendationEngine
-
+import pandas as pd
+import joblib 
 import logging
 import traceback
+from recommendation_engine import RecommendationEngine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,16 +10,37 @@ logger = logging.getLogger(__name__)
 engine = None
 
 try:
+    logger.info("Loading ML artifacts and dataset...")
+    
+    # 1. Load the pre-processed dataframe
+    tmdb_df = pd.read_csv("data/tmdb_movies.csv")
+    
+    # 2. Load the serialized machine learning models
+    # Ensure these paths point to where your train.py saved them
+    tmdb_latent = joblib.load("models/tmdb_latent.pkl")
+    mlb = joblib.load("models/mlb.pkl")
+    ridge = joblib.load("models/ridge.pkl")
+    
+    # Optional: Load collaborative filtering factors if utilized
+    # user_factors = joblib.load("models/user_factors.pkl")
+    # movie_factors = joblib.load("models/movie_factors.pkl")
+
     logger.info("Initiating Hybrid Recommendation Engine...")
     
-    # 2. THIS MUST COME AFTER THE IMPORT
-    engine = RecommendationEngine(dataset_path="data/tmdb_movies.csv")
+    # 3. Instantiate the engine with the required objects
+    engine = RecommendationEngine(
+        tmdb_df=tmdb_df,
+        tmdb_latent=tmdb_latent,
+        mlb=mlb,
+        ridge=ridge
+        # user_factors=user_factors,
+        # movie_factors=movie_factors
+    )
     
     logger.info("Engine instantiated successfully.")
 except Exception as e:
     logger.error("FATAL: Engine initialization failed.")
     logger.error(traceback.format_exc())
-
 # ... rest of your Flask app code ...
 import os
 from functools import wraps
