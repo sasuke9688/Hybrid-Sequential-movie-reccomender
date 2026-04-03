@@ -843,7 +843,8 @@ function setRatingStars(value) {
     });
 }
 
-async function submitCurrentRating() {
+
+ async function submitCurrentRating() {
     if (!currentRatingContext) {
         return;
     }
@@ -853,13 +854,17 @@ async function submitCurrentRating() {
         return;
     }
 
-    const saved = await saveMovieRating(currentRatingContext.index, currentRatingValue);
-    if (saved && currentRatingContext.buttonEl) {
-        updateWatchButtonState(currentRatingContext.buttonEl, currentRatingValue);
-    }
-    if (saved && typeof currentRatingContext.onRated === "function") {
+    // 1. Optimistic Update: Bind the rating to local state immediately
+    if (typeof currentRatingContext.onRated === "function") {
         currentRatingContext.onRated(currentRatingValue);
     }
+    
+    if (currentRatingContext.buttonEl) {
+        updateWatchButtonState(currentRatingContext.buttonEl, currentRatingValue);
+    }
+
+    // 2. Execute the backend save asynchronously
+    const saved = await saveMovieRating(currentRatingContext.index, currentRatingValue);
 
     if (saved && historyModal.style.display === "flex") {
         await openHistoryModal();
