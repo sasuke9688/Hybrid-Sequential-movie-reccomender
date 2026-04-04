@@ -12,14 +12,15 @@ jobs:
     permissions:
       contents: write # Allows GitHub to commit the new files
 
-    steps:
+steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # <-- Updated to v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # <-- Updated to v5
         with:
           python-version: '3.11'
+
 
       - name: Install Dependencies
         run: |
