@@ -4,18 +4,20 @@ import pandas as pd
 import kaggle
 import logging
 
-# Append root directory to sys.path to allow importing your native modules
+# Append root directory to sys.path to allow importing native modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import TMDB_MOVIES
-from train import main as run_training
+from train import main as run_training  # <--- THIS IS THE FIX
 
+# Configure strict logging for CI/CD tracking
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- CONFIGURATION ---
 KAGGLE_DATASET = 'asaniczka/tmdb-movies-dataset-2023-930k-movies'
 DATA_DIR = os.path.dirname(os.path.abspath(TMDB_MOVIES))
-MIN_VOTE_COUNT = 500  # Adjust this if the resulting CSV exceeds GitHub's 100MB limit
+MIN_VOTE_COUNT = 500  
 
 def execute_size_reduction_etl():
     """Download the raw TMDB dataset and strictly reduce its file size."""
@@ -36,7 +38,7 @@ def execute_size_reduction_etl():
     # 1. Row Reduction: Keep only statistically significant movies
     lite_df = raw_df[raw_df['vote_count'] >= MIN_VOTE_COUNT].copy()
     
-    # 2. Column Reduction: Drop heavyweight text arrays unused by your CF/HMM models
+    # 2. Column Reduction: Drop heavyweight text arrays unused by CF/HMM models
     columns_to_drop = [
         'overview', 'tagline', 'homepage', 'production_companies', 
         'spoken_languages', 'backdrop_path', 'poster_path', 'credits'
@@ -56,10 +58,8 @@ if __name__ == "__main__":
         execute_size_reduction_etl()
         
         # Stage 2: Matrix Computation
-        # Your train.py will now natively utilize load_tmdb_dataset() to load 
-        # the lightweight file and execute your comprehensive cleaning logic.
         logger.info("Initiating core hybrid training sequence...")
-        artifacts = run_training()
+        run_training()  # <--- THIS IS THE SECOND FIX
         
         logger.info("CI/CD Pipeline executed successfully.")
         
