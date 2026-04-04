@@ -12,8 +12,8 @@ engine = None
 try:
     logger.info("Loading ML artifacts and dataset...")
     
-    # 1. Load the pre-processed dataframe
-    tmdb_df = pd.read_csv("data/tmdb_movies.csv")
+   # 1. Load the pre-processed dataframe
+    tmdb_df = pd.read_csv("data/tmdb_movies_lite.csv")
     
     # 2. Load the serialized machine learning models
     # Ensure these paths point to where your train.py saved them
