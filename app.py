@@ -15,11 +15,10 @@ try:
    # 1. Load the pre-processed dataframe
     tmdb_df = pd.read_csv("data/tmdb_movies_lite.csv")
     
-    # 2. Load the serialized machine learning models
-    # Ensure these paths point to where your train.py saved them
+ # 2. Load the serialized machine learning models
     tmdb_latent = joblib.load("models/tmdb_latent.pkl")
     mlb = joblib.load("models/mlb.pkl")
-    ridge = joblib.load("models/ridge.pkl")
+    ridge = joblib.load("models/ridge_model.pkl") # <-- Updated filename!
     
     # Optional: Load collaborative filtering factors if utilized
     # user_factors = joblib.load("models/user_factors.pkl")
