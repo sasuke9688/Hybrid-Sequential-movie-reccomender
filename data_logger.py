@@ -1,10 +1,9 @@
-# data_logger.py
 import os
 from supabase import create_client, Client
 
-# Use environment variables so you don't hardcode secrets in GitHub
-URL = os.environ.get("https://supabase.com/dashboard/project/niqemviobrituppewxco/editor/17539?schema=public")
-KEY = os.environ.get("sbp_a09f1c78d3481ad673bdc42af01970ca7c4e39d9")
+# Correct usage: look up the NAMES of the variables, not the values!
+URL = os.environ.get("SUPABASE_URL")
+KEY = os.environ.get("SUPABASE_KEY")
 
 def log_user_interaction(username: str, movie_id: int, rating: float) -> None:
     if not URL or not KEY:
