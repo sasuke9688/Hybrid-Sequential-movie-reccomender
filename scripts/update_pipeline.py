@@ -1,43 +1,63 @@
 import os
+import sys
 import pandas as pd
-import joblib
 import kaggle
-# Import your training functions from your existing modules
-from model_training import train_hybrid_model 
+import logging
 
-def run_pipeline():
-    print("Authenticating and downloading TMDB dataset from Kaggle...")
+# Append root directory to path to allow importing your existing modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from train import run_training_pipeline
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- CONFIGURATION ---
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+KAGGLE_DATASET = 'asaniczka/tmdb-movies-dataset-2023-930k-movies'
+TARGET_TMDB_FILE = os.path.join(DATA_DIR, "tmdb_movies_lite.csv") # Must match your load_tmdb_dataset() path
+MIN_VOTE_COUNT = 500
+
+def run_etl():
+    """Download and downsample the TMDB dataset."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    
+    logger.info("Authenticating with Kaggle API...")
     kaggle.api.authenticate()
-    kaggle.api.dataset_download_files(
-        'asaniczka/tmdb-movies-dataset-2023-930k-movies', 
-        path='data/', 
-        unzip=True
-    )
     
-    # 1. Load and downsample
-    print("Loading and filtering dataset...")
-    raw_df = pd.read_csv("data/TMDB_movie_dataset_v11.csv") # Adjust filename to Kaggle's exact output
+    logger.info("Downloading raw TMDB dataset...")
+    kaggle.api.dataset_download_files(KAGGLE_DATASET, path=DATA_DIR, unzip=True)
     
-    # Aggressive filtering to keep the matrix small (e.g., top 15,000 most voted movies)
-    lite_df = raw_df[raw_df['vote_count'] > 500].copy()
+    # Locate the extracted file (Kaggle typically extracts this as TMDB_movie_dataset_v11.csv)
+    raw_csv_path = os.path.join(DATA_DIR, "TMDB_movie_dataset_v11.csv")
     
-    # Drop unneeded text columns to save space
-    columns_to_drop = ['overview', 'tagline', 'homepage', 'poster_path']
-    lite_df.drop(columns=[c for c in columns_to_drop if c in lite_df.columns], inplace=True)
+    logger.info("Loading and filtering dataset to satisfy memory constraints...")
+    raw_df = pd.read_csv(raw_csv_path)
     
-    # Save the lightweight dataset
-    lite_df.to_csv("data/tmdb_movies_lite.csv", index=False)
-    print(f"Filtered dataset saved. Final shape: {lite_df.shape}")
-
-    # 2. Retrain models based strictly on the lightweight dataset
-    print("Regenerating ML artifacts...")
-    tmdb_latent, mlb, ridge = train_hybrid_model(lite_df)
+    # Enforce downsampling to prevent Render OOM and GitHub file limit errors
+    lite_df = raw_df[raw_df['vote_count'] >= MIN_VOTE_COUNT].copy()
     
-    # 3. Serialize and overwrite old models
-    joblib.dump(tmdb_latent, "models/tmdb_latent.pkl")
-    joblib.dump(mlb, "models/mlb.pkl")
-    joblib.dump(ridge, "models/ridge.pkl")
-    print("Pipeline complete. Artifacts updated.")
+    # Drop heavyweight columns strictly unnecessary for CF or HMM evaluation
+    drop_cols = ['overview', 'tagline', 'homepage', 'production_companies', 'backdrop_path']
+    lite_df.drop(columns=[c for c in drop_cols if c in lite_df.columns], inplace=True)
+    
+    logger.info(f"Writing optimized dataset ({lite_df.shape[0]} rows) to {TARGET_TMDB_FILE}...")
+    lite_df.to_csv(TARGET_TMDB_FILE, index=False)
+    
+    # Cleanup raw 150MB+ file
+    os.remove(raw_csv_path)
+    logger.info("ETL Phase Complete.")
 
 if __name__ == "__main__":
-    run_pipeline()
+    try:
+        # Phase 1: Prepare the data
+        run_etl()
+        
+        # Phase 2: Execute your proprietary training pipeline
+        logger.info("Initiating core training sequence...")
+        artifacts = run_training_pipeline()
+        
+        logger.info("CI/CD Pipeline executed successfully.")
+        
+    except Exception as e:
+        logger.error("FATAL: Pipeline execution failed.", exc_info=True)
+        sys.exit(1)
