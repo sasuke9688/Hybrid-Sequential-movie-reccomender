@@ -7,8 +7,7 @@ MOVIELENS_RATINGS = f"{DATA_DIR}/ml-1m/ratings.dat"
 MOVIELENS_MOVIES  = f"{DATA_DIR}/ml-1m/movies.dat"
 MOVIELENS_USERS   = f"{DATA_DIR}/ml-1m/users.dat"
 
-# TMDB file
-TMDB_MOVIES = f"{DATA_DIR}/tmdb_movies.csv"
+TMDB_MOVIES = "data/tmdb_movies_lite.csv"
 
 # Model hyperparameters
 LATENT_DIM  = 50
