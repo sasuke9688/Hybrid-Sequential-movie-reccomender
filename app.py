@@ -23,7 +23,7 @@ from data_logger import log_user_interaction
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. Instantiate Flask App (Must occur before ANY @app.route decorators)
+# 2. Instantiate Flask App
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 
@@ -33,11 +33,7 @@ engine_error = "No error recorded."
 
 try:
     logger.info("Loading ML artifacts and dataset...")
-    # Load the lightweight pre-processed dataframe
-    # Load the fully processed dataframe artifact
     tmdb_df = joblib.load("models/tmdb_dataset.pkl")
-    
-    # Load the serialized machine learning matrices
     tmdb_latent = joblib.load("models/tmdb_latent.pkl")
     mlb = joblib.load("models/mlb.pkl")
     ridge = joblib.load("models/ridge_model.pkl")
@@ -169,7 +165,6 @@ def api_add_history():
 
     if rating is not None:
         try:
-            # UPDATE THIS LINE: Add movie_title
             log_user_interaction(session["username"], movie_index, movie_title, rating)
         except Exception as e:
             logger.error(f"Data logging failed for user {session['username']}: {e}")
@@ -191,12 +186,11 @@ def api_update_rating(movie_index):
     if not ok:
         return jsonify({"error": msg}), 400
 
-       try:
-            # UPDATE THIS BLOCK: Fetch the title from the engine, then log it
-            movie_title = engine.tmdb_df.iloc[movie_index]["title"]
-            log_user_interaction(session["username"], movie_index, movie_title, rating)
-        except Exception as e:
-            logger.error(f"Data logging failed for user {session['username']}: {e}")
+    try:
+        movie_title = engine.tmdb_df.iloc[movie_index]["title"]
+        log_user_interaction(session["username"], movie_index, movie_title, rating)
+    except Exception as e:
+        logger.error(f"Data logging failed for user {session['username']}: {e}")
 
     return jsonify({"message": msg})
 
@@ -213,14 +207,14 @@ def api_remove_history(movie_index):
 @app.route("/api/languages", methods=["GET"])
 def api_languages():
     if engine is None:
-         return jsonify({"error": "Engine unavailable"}), 500
+        return jsonify({"error": "Engine unavailable"}), 500
     languages = engine.get_available_languages(min_count=MIN_LANGUAGE_COUNT)
     return jsonify({"languages": languages})
 
 @app.route("/api/genres", methods=["GET"])
 def api_genres():
     if engine is None:
-         return jsonify({"error": "Engine unavailable"}), 500
+        return jsonify({"error": "Engine unavailable"}), 500
     genres = engine.get_available_genres()
     return jsonify({"genres": genres})
 
@@ -229,7 +223,7 @@ def api_genres():
 @app.route("/api/search", methods=["GET"])
 def search_movies():
     if engine is None:
-         return jsonify({"error": "Engine unavailable"}), 500
+        return jsonify({"error": "Engine unavailable"}), 500
          
     query    = request.args.get("q", "").strip()
     language = request.args.get("language", "").strip()
@@ -249,7 +243,7 @@ def search_movies():
 @app.route("/api/recommend", methods=["POST"])
 def recommend():
     if engine is None:
-         return jsonify({"error": "Engine unavailable"}), 500
+        return jsonify({"error": "Engine unavailable"}), 500
 
     data = request.get_json()
     if not data or "movies" not in data:
@@ -291,9 +285,8 @@ def recommend():
                 rating,
             )
 
-           if ok and rating is not None:
+            if ok and rating is not None:
                 try:
-                    # UPDATE THIS LINE: Add movie_title
                     log_user_interaction(session["username"], idx, movie_title, rating)
                 except Exception as e:
                     logger.error(f"Data logging failed for user {session['username']}: {e}")
@@ -337,7 +330,7 @@ def recommend():
 @app.route("/api/stats", methods=["GET"])
 def stats():
     if engine is None:
-         return jsonify({"error": "Engine unavailable"}), 500
+        return jsonify({"error": "Engine unavailable"}), 500
          
     lang_count = 0
     if "original_language" in engine.tmdb_df.columns:
