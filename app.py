@@ -34,7 +34,8 @@ engine_error = "No error recorded."
 try:
     logger.info("Loading ML artifacts and dataset...")
     # Load the lightweight pre-processed dataframe
-    tmdb_df = pd.read_csv("data/tmdb_movies_lite.csv")
+    # Load the fully processed dataframe artifact
+    tmdb_df = joblib.load("models/tmdb_dataset.pkl")
     
     # Load the serialized machine learning matrices
     tmdb_latent = joblib.load("models/tmdb_latent.pkl")
