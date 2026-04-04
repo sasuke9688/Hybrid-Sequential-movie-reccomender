@@ -6,7 +6,36 @@ from recommendation_engine import RecommendationEngine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+import traceback
 
+engine = None
+engine_error = "No error recorded."
+
+try:
+    # Attempt to load files and build the engine
+    tmdb_df = pd.read_csv("data/tmdb_movies_lite.csv")
+    tmdb_latent = joblib.load("models/tmdb_latent.pkl")
+    mlb = joblib.load("models/mlb.pkl")
+    ridge = joblib.load("models/ridge_model.pkl")
+    
+    engine = RecommendationEngine(
+        tmdb_df=tmdb_df,
+        tmdb_latent=tmdb_latent,
+        mlb=mlb,
+        ridge=ridge
+    )
+except Exception as e:
+    # If it fails, capture the exact Python traceback
+    engine_error = traceback.format_exc()
+    logger.error(f"FATAL: Engine initialization failed.\n{engine_error}")
+
+# -------- ADD THIS NEW DEBUG ROUTE --------
+@app.route('/debug')
+def debug_boot():
+    if engine is None:
+        return f"<h1>Engine Failed to Boot</h1><hr><pre>{engine_error}</pre>"
+    return "<h1>Engine Loaded Successfully!</h1>"
+# ------------------------------------------
 engine = None
 
 try:
