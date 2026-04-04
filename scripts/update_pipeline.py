@@ -8,7 +8,7 @@ import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import TMDB_MOVIES
-from train import run_training_pipeline
+from train import main as run_training
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ if __name__ == "__main__":
         # Your train.py will now natively utilize load_tmdb_dataset() to load 
         # the lightweight file and execute your comprehensive cleaning logic.
         logger.info("Initiating core hybrid training sequence...")
-        artifacts = run_training_pipeline()
+        artifacts = run_training()
         
         logger.info("CI/CD Pipeline executed successfully.")
         
