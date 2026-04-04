@@ -191,12 +191,12 @@ def api_update_rating(movie_index):
     if not ok:
         return jsonify({"error": msg}), 400
 
-   try:
-        # UPDATE THIS BLOCK: Fetch the title from the engine, then log it
-        movie_title = engine.tmdb_df.iloc[movie_index]["title"]
-        log_user_interaction(session["username"], movie_index, movie_title, rating)
-    except Exception as e:
-        logger.error(f"Data logging failed for user {session['username']}: {e}")
+       try:
+            # UPDATE THIS BLOCK: Fetch the title from the engine, then log it
+            movie_title = engine.tmdb_df.iloc[movie_index]["title"]
+            log_user_interaction(session["username"], movie_index, movie_title, rating)
+        except Exception as e:
+            logger.error(f"Data logging failed for user {session['username']}: {e}")
 
     return jsonify({"message": msg})
 
