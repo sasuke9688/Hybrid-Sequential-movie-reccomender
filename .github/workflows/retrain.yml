@@ -1,0 +1,42 @@
+name: Weekly Model Retraining
+
+# Trigger this script every Sunday at 3:00 AM UTC
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch: # Allows you to click a button to run it manually
+
+jobs:
+  train-and-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Allows GitHub to commit the new files
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install supabase
+
+      - name: Run Training Script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python train.py
+
+      - name: Commit and Push New Model Artifacts
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add models/*.pkl
+          # Only commit if the files actually changed
+          git commit -m "Automated model retraining with new user data" || echo "No changes to commit"
+          git push
