@@ -169,7 +169,8 @@ def api_add_history():
 
     if rating is not None:
         try:
-            log_user_interaction(session["username"], movie_index, rating)
+            # UPDATE THIS LINE: Add movie_title
+            log_user_interaction(session["username"], movie_index, movie_title, rating)
         except Exception as e:
             logger.error(f"Data logging failed for user {session['username']}: {e}")
 
@@ -190,8 +191,10 @@ def api_update_rating(movie_index):
     if not ok:
         return jsonify({"error": msg}), 400
 
-    try:
-        log_user_interaction(session["username"], movie_index, rating)
+   try:
+        # UPDATE THIS BLOCK: Fetch the title from the engine, then log it
+        movie_title = engine.tmdb_df.iloc[movie_index]["title"]
+        log_user_interaction(session["username"], movie_index, movie_title, rating)
     except Exception as e:
         logger.error(f"Data logging failed for user {session['username']}: {e}")
 
@@ -288,9 +291,10 @@ def recommend():
                 rating,
             )
 
-            if ok and rating is not None:
+           if ok and rating is not None:
                 try:
-                    log_user_interaction(session["username"], idx, rating)
+                    # UPDATE THIS LINE: Add movie_title
+                    log_user_interaction(session["username"], idx, movie_title, rating)
                 except Exception as e:
                     logger.error(f"Data logging failed for user {session['username']}: {e}")
 
