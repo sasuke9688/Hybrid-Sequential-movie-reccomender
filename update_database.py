@@ -18,7 +18,7 @@ def run_pipeline():
     import kaggle
     
     # Replace 'user/dataset-slug' with the exact TMDB dataset slug from Kaggle's URL
-    kaggle_dataset = "https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies" # (Or whatever yours actually is)
+    kaggle_dataset = "asaniczka/tmdb-movies-dataset-2023-930k-movies" # (Or whatever yours actually is)
     kaggle.api.dataset_download_files(kaggle_dataset, path=".", unzip=True)
     
     # Update this filename to match the extracted CSV
