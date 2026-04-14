@@ -20,13 +20,14 @@ def run_pipeline():
     # Replace 'user/dataset-slug' with the exact TMDB dataset slug from Kaggle's URL
     kaggle_dataset = "asaniczka/tmdb-movies-dataset-2023-930k-movies" # (Or whatever yours actually is)
     kaggle.api.dataset_download_files(kaggle_dataset, path=".", unzip=True)
-    
+
     # Update this filename to match the extracted CSV
     csv_filename = "tmdb_movies.csv" 
     print(f"Loading {csv_filename} into Pandas...")
     
     # 2. Extract and Transform
     df = pd.read_csv(csv_filename)
+
     
     # Ensure NaN values are converted to None for PostgreSQL compatibility
     df = df.where(pd.notnull(df), None)
