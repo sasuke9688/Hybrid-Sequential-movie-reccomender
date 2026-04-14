@@ -21,12 +21,20 @@ def run_pipeline():
     kaggle_dataset = "asaniczka/tmdb-movies-dataset-2023-930k-movies" # (Or whatever yours actually is)
     kaggle.api.dataset_download_files(kaggle_dataset, path=".", unzip=True)
 
-    # Update this filename to match the extracted CSV
-    csv_filename = "tmdb_movies.csv" 
-    print(f"Loading {csv_filename} into Pandas...")
+    import glob
+    
+    # Automatically find the downloaded CSV file
+    csv_files = glob.glob("*.csv")
+    if not csv_files:
+        raise FileNotFoundError("No CSV file was found after unzipping the Kaggle dataset!")
+        
+    csv_filename = csv_files[0] # Grab the first CSV file it finds
+    print(f"Found dataset file: {csv_filename}. Loading into Pandas...")
     
     # 2. Extract and Transform
     df = pd.read_csv(csv_filename)
+
+
 
     
     # Ensure NaN values are converted to None for PostgreSQL compatibility
