@@ -31,8 +31,16 @@ def run_pipeline():
     csv_filename = csv_files[0] # Grab the first CSV file it finds
     print(f"Found dataset file: {csv_filename}. Loading into Pandas...")
     
+    
+
     # 2. Extract and Transform
     df = pd.read_csv(csv_filename)
+    
+    # Define exactly which columns your database and app care about
+    columns_to_keep = ['title', 'genres', 'original_language', 'release_date'] 
+    
+    # Filter the dataframe to drop everything else
+    df = df[columns_to_keep]
 
 
 
