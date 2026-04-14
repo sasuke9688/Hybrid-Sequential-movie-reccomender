@@ -11,3 +11,4 @@ supabase>=2.3.0
 python-dotenv>=1.0.0
 gunicorn>=21.2.0
 kaggle
+torch==2.2.2
