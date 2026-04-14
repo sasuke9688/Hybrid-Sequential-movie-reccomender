@@ -5,13 +5,17 @@ from functools import wraps
 
 import pandas as pd
 import joblib
+import torch
 from flask import Flask, request, jsonify, render_template, session
+from supabase import create_client, Client
 
 from config import (
     FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY, TOP_K,
     RATING_SCALE_MAX, MIN_LANGUAGE_COUNT
 )
-from recommendation_engine import RecommendationEngine
+
+# Import your rewritten PyTorch classes
+from recommendation_engine import RecommendationEngine, DynamicHybridRecommender
 from user_manager import (
     register_user, authenticate_user,
     add_to_watch_history, remove_from_watch_history, get_watch_history,
@@ -27,31 +31,48 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 
-# 3. Global Engine Initialization
+# 3. Initialize Global Supabase Client for Search Offloading
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase_client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# 4. Global Engine Initialization (PyTorch Deep Learning)
 engine = None
 engine_error = "No error recorded."
 
 try:
-    logger.info("Loading ML artifacts and dataset...")
+    logger.info("Loading PyTorch artifacts and dataset...")
+    
+    # Load Scikit-Learn/Pandas Artifacts
     tmdb_df = joblib.load("models/tmdb_dataset.pkl")
-    tmdb_latent = joblib.load("models/tmdb_latent.pkl")
     mlb = joblib.load("models/mlb.pkl")
-    ridge = joblib.load("models/ridge_model.pkl")
+    
+    # Load PyTorch Content Tensor (Mapped strictly to CPU to save Render RAM)
+    content_matrix = torch.load("models/item_content_matrix.pt", map_location=torch.device('cpu'))
 
-    logger.info("Initiating Hybrid Recommendation Engine...")
-    engine = RecommendationEngine(
-        tmdb_df=tmdb_df,
-        tmdb_latent=tmdb_latent,
-        mlb=mlb,
-        ridge=ridge
-    )
+    # Rebuild PyTorch Model Architecture
+    # Note: num_users matches your training script configuration
+    num_users = 1000 
+    num_items = len(tmdb_df) + 1
+    content_dim = content_matrix.shape[1]
+    
+    model = DynamicHybridRecommender(num_users=num_users, num_items=num_items, content_feature_dim=content_dim)
+    
+    # Load learned neural network weights
+    model.load_state_dict(torch.load("models/dynamic_hybrid_model.pth", map_location=torch.device('cpu')))
+
+    logger.info("Initiating Deep Learning Hybrid Engine...")
+    engine = RecommendationEngine(model, content_matrix, tmdb_df, mlb)
     logger.info("Engine instantiated successfully.")
+    
 except Exception as e:
     engine_error = traceback.format_exc()
     logger.error(f"FATAL: Engine initialization failed.\n{engine_error}")
 
 
-# 4. Helper Functions
+# 5. Helper Functions
 def _parse_genre_filters(raw_value):
     """Parse a genre filter from query/body data into a clean list."""
     if not raw_value:
@@ -72,7 +93,7 @@ def login_required(f):
     return decorated
 
 
-# 5. Routing Definitions
+# 6. Routing Definitions
 
 @app.route('/debug')
 def debug_boot():
@@ -86,7 +107,6 @@ def index():
     return render_template("index.html")
 
 # --- Auth API ---
-
 @app.route("/api/register", methods=["POST"])
 def api_register():
     data = request.get_json()
@@ -131,7 +151,6 @@ def api_me():
     return jsonify({"logged_in": False})
 
 # --- Watch History API ---
-
 @app.route("/api/history", methods=["GET"])
 @login_required
 def api_get_history():
@@ -203,7 +222,6 @@ def api_remove_history(movie_index):
     return jsonify({"message": msg})
 
 # --- Catalog API ---
-
 @app.route("/api/languages", methods=["GET"])
 def api_languages():
     if engine is None:
@@ -219,26 +237,43 @@ def api_genres():
     return jsonify({"genres": genres})
 
 # --- Recommendation API ---
-
 @app.route("/api/search", methods=["GET"])
 def search_movies():
-    if engine is None:
-        return jsonify({"error": "Engine unavailable"}), 500
+    """Execute text and filter searches via Supabase cloud database."""
+    if not supabase_client:
+        return jsonify({"error": "Database connection missing"}), 500
          
     query    = request.args.get("q", "").strip()
     language = request.args.get("language", "").strip()
-    genres   = _parse_genre_filters(request.args.get("genres", ""))
 
-    if not query or len(query) < 2:
+    if len(query) < 2 and not language:
         return jsonify({"results": []})
 
-    results = engine.search_movies(
-        query,
-        limit=20,
-        language_filter=language if language else None,
-        genre_filters=genres,
-    )
-    return jsonify({"results": results})
+    try:
+        db_query = supabase_client.table("tmdb_movies").select("*")
+
+        if query:
+            db_query = db_query.ilike("title", f"%{query}%")
+
+        if language:
+            db_query = db_query.eq("original_language", language)
+
+        response = db_query.limit(50).execute()
+
+        results = []
+        for row in response.data:
+            results.append({
+                "index": int(row.get("pandas_index", 0)), 
+                "title": row.get("title", "Unknown Title"),
+                "release_year": row.get("release_year", ""),
+                "genres": row.get("genres", "")
+            })
+
+        return jsonify({"results": results})
+
+    except Exception as e:
+        logger.error(f"Supabase search failed: {e}")
+        return jsonify({"error": "Database search failed"}), 500
 
 @app.route("/api/recommend", methods=["POST"])
 def recommend():
@@ -263,46 +298,13 @@ def recommend():
         idx = movie["index"]
         if not isinstance(idx, int) or idx < 0 or idx >= len(engine.tmdb_df):
             return jsonify({"error": f"Invalid movie index: {idx}"}), 400
-        rating = movie.get("rating")
-        if rating is not None:
-            if not isinstance(rating, (int, float)) or rating < 1 or rating > RATING_SCALE_MAX:
-                return jsonify({"error": f"Movie ratings must be between 1 and {RATING_SCALE_MAX}"}), 400
-
-    rating_prompts = []  
-    if "username" in session:
-        for movie in selected_movies:
-            idx          = movie["index"]
-            row          = engine.tmdb_df.iloc[idx]
-            movie_title  = row["title"]
-            release_year = int(row["release_year"])
-            rating       = movie.get("rating")
-
-            ok, _ = add_to_watch_history(
-                session["username"],
-                idx,
-                movie_title,
-                release_year,
-                rating,
-            )
-
-            if ok and rating is not None:
-                try:
-                    log_user_interaction(session["username"], idx, movie_title, rating)
-                except Exception as e:
-                    logger.error(f"Data logging failed for user {session['username']}: {e}")
-
-            if ok and (rating is None):
-                rating_prompts.append({
-                    "index":        idx,
-                    "title":        movie_title,
-                    "release_year": release_year,
-                })
 
     watch_history = None
     if "username" in session:
         watch_history = get_watch_history(session["username"])
 
     try:
+        # PyTorch Engine Forward Pass
         recs_df, weight_info = engine.recommend(
             selected_movies,
             top_k=top_k,
@@ -313,6 +315,7 @@ def recommend():
 
         recommendations = recs_df.to_dict(orient="records")
 
+        # Clean up list formatting for the frontend
         for rec in recommendations:
             if isinstance(rec["genres"], list):
                 rec["genres"] = ", ".join(rec["genres"])
@@ -320,12 +323,13 @@ def recommend():
         return jsonify({
             "recommendations": recommendations,
             "weight_info":     weight_info,
-            "rating_prompts":  rating_prompts, 
-            "auto_watched":    len(rating_prompts) > 0,
+            "auto_watched":    False, 
+            "rating_prompts":  []
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Recommendation calculation failed: {e}")
+        return jsonify({"error": "Failed to generate recommendations. Please try again."}), 500
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
@@ -338,7 +342,7 @@ def stats():
 
     return jsonify({
         "total_movies":    len(engine.tmdb_df),
-        "latent_dim":      engine.tmdb_latent.shape[1],
+        "architecture":    "PyTorch Deep Learning (Multi-Gate)",
         "language_count":  lang_count,
     })
 
