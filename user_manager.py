@@ -1,207 +1,115 @@
-"""
-User management module.
-Handles user registration, login, and watch history storage using JSON files.
-Each user's data is stored in data/users/<username>.json.
-"""
-
 import os
-import json
-import hashlib
-import secrets
-import time
+import logging
+from werkzeug.security import generate_password_hash, check_password_hash
+from supabase import create_client, Client
 
-from config import DATA_DIR, RATING_SCALE_MAX
+logger = logging.getLogger(__name__)
 
-USERS_DIR = os.path.join(DATA_DIR, "users")
+# Initialize Supabase Client
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-
-def _users_dir():
-    os.makedirs(USERS_DIR, exist_ok=True)
-    return USERS_DIR
-
-
-def _user_path(username):
-    safe = "".join(c for c in username if c.isalnum() or c in "_-")
-    return os.path.join(_users_dir(), f"{safe}.json")
-
-
-def _hash_password(password, salt=None):
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return salt, hashed
-
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    logger.error("FATAL: Supabase credentials missing in user_manager.py")
 
 def register_user(username, password):
-    """
-    Register a new user. Returns (success, message).
-    """
+    if not supabase: return False, "Database connection error"
     username = username.strip().lower()
-    if not username or len(username) < 3:
-        return False, "Username must be at least 3 characters."
-    if len(password) < 4:
-        return False, "Password must be at least 4 characters."
-
-    path = _user_path(username)
-    if os.path.exists(path):
-        return False, "Username already exists."
-
-    salt, hashed = _hash_password(password)
-    user_data = {
-        "username": username,
-        "password_hash": hashed,
-        "password_salt": salt,
-        "created_at": time.time(),
-        "watch_history": [],
-    }
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(user_data, f, indent=2)
-
-    return True, "Registration successful."
-
+    
+    try:
+        # Check if user already exists
+        res = supabase.table("app_users").select("*").eq("username", username).execute()
+        if len(res.data) > 0:
+            return False, "Username already exists"
+            
+        # Hash password and save to Supabase
+        hashed_pw = generate_password_hash(password)
+        supabase.table("app_users").insert({"username": username, "password_hash": hashed_pw}).execute()
+        return True, "Registration successful"
+    except Exception as e:
+        logger.error(f"DB Error during registration: {e}")
+        return False, "Failed to register account"
 
 def authenticate_user(username, password):
-    """
-    Authenticate a user. Returns (success, message).
-    """
+    if not supabase: return False, "Database connection error"
     username = username.strip().lower()
-    path = _user_path(username)
-
-    if not os.path.exists(path):
-        return False, "User not found."
-
-    with open(path, "r", encoding="utf-8") as f:
-        user_data = json.load(f)
-
-    salt = user_data["password_salt"]
-    _, hashed = _hash_password(password, salt)
-
-    if hashed != user_data["password_hash"]:
-        return False, "Incorrect password."
-
-    return True, "Login successful."
-
-
-def _load_user(username):
-    username = username.strip().lower()
-    path = _user_path(username)
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        user_data = json.load(f)
-
-    if _migrate_history_ratings(user_data):
-        _save_user(username, user_data)
-
-    return user_data
-
-
-def _save_user(username, user_data):
-    username = username.strip().lower()
-    path = _user_path(username)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(user_data, f, indent=2)
-
-
-def _normalize_rating(rating):
-    """Normalize legacy or incoming ratings to the active star scale."""
-    if rating is None:
-        return None
-
-    value = float(rating)
-    if value > RATING_SCALE_MAX:
-        value /= 2.0
-
-    value = int(round(value))
-    return max(1, min(RATING_SCALE_MAX, value))
-
-
-def _migrate_history_ratings(user_data):
-    """Keep stored history ratings consistent with the current 5-star UI."""
-    changed = False
-    for entry in user_data.get("watch_history", []):
-        if entry.get("rating") is None:
-            continue
-        normalized = _normalize_rating(entry["rating"])
-        if entry["rating"] != normalized:
-            entry["rating"] = normalized
-            changed = True
-    return changed
-
-
-def add_to_watch_history(username, movie_index, movie_title, release_year, rating=None):
-    """
-    Add a movie to the user's watch history with current timestamp and optional rating.
-    Avoids duplicates (by index). If already present, updates the timestamp and rating.
-    """
-    user_data = _load_user(username)
-    if user_data is None:
-        return False, "User not found."
-
-    history = user_data.get("watch_history", [])
-
-    # Check for duplicate by index, update timestamp and rating if found
-    for entry in history:
-        if entry["index"] == movie_index:
-            entry["timestamp"] = time.time()
-            if rating is not None:
-                entry["rating"] = _normalize_rating(rating)
-            user_data["watch_history"] = history
-            _save_user(username, user_data)
-            return True, "Watch timestamp updated."
-
-    entry = {
-        "index": movie_index,
-        "title": movie_title,
-        "release_year": release_year,
-        "timestamp": time.time(),
-    }
-    if rating is not None:
-        entry["rating"] = _normalize_rating(rating)
-
-    history.append(entry)
-    user_data["watch_history"] = history
-    _save_user(username, user_data)
-    return True, "Movie added to watch history."
-
-
-def update_rating(username, movie_index, rating):
-    """Update the rating for a movie in the user's watch history."""
-    user_data = _load_user(username)
-    if user_data is None:
-        return False, "User not found."
-
-    for entry in user_data.get("watch_history", []):
-        if entry["index"] == movie_index:
-            entry["rating"] = _normalize_rating(rating)
-            _save_user(username, user_data)
-            return True, "Rating updated."
-
-    return False, "Movie not found in history."
-
-
-def remove_from_watch_history(username, movie_index):
-    """Remove a movie from user's watch history."""
-    user_data = _load_user(username)
-    if user_data is None:
-        return False, "User not found."
-
-    history = user_data.get("watch_history", [])
-    user_data["watch_history"] = [e for e in history if e["index"] != movie_index]
-    _save_user(username, user_data)
-    return True, "Movie removed from history."
-
+    
+    try:
+        # Fetch user from Supabase
+        res = supabase.table("app_users").select("*").eq("username", username).execute()
+        if len(res.data) == 0:
+            return False, "Invalid username or password"
+            
+        user = res.data[0]
+        # Verify Password
+        if check_password_hash(user["password_hash"], password):
+            return True, "Login successful"
+        return False, "Invalid username or password"
+    except Exception as e:
+        logger.error(f"DB Error during login: {e}")
+        return False, "Login validation failed"
 
 def get_watch_history(username):
-    """
-    Get user's full watch history sorted by timestamp (newest first).
-    Returns list of dicts with index, title, release_year, timestamp.
-    """
-    user_data = _load_user(username)
-    if user_data is None:
+    if not supabase: return []
+    try:
+        # Fetch all saved movies for this user
+        res = supabase.table("watch_history").select("*").eq("username", username).order("added_at", desc=True).execute()
+        
+        # Format the data exactly how your frontend app.js expects it
+        history = []
+        for row in res.data:
+            history.append({
+                "index": row["movie_index"],
+                "title": row["title"],
+                "release_year": row.get("release_year", "N/A"),
+                "rating": row.get("rating")
+            })
+        return history
+    except Exception as e:
+        logger.error(f"DB Error fetching history: {e}")
         return []
 
-    history = user_data.get("watch_history", [])
-    history.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-    return history
+def add_to_watch_history(username, movie_index, title, release_year, rating=None):
+    if not supabase: return False, "Database connection error"
+    
+    try:
+        # Prevent duplicate entries in the user's history
+        res = supabase.table("watch_history").select("*").eq("username", username).eq("movie_index", movie_index).execute()
+        if len(res.data) > 0:
+            return False, "Movie is already in your Watch History!"
+            
+        data = {
+            "username": username,
+            "movie_index": int(movie_index),
+            "title": str(title),
+            "release_year": str(release_year),
+            "rating": float(rating) if rating else None
+        }
+        
+        # Save movie directly into the Supabase database
+        supabase.table("watch_history").insert(data).execute()
+        return True, "Movie added to Watch History"
+    except Exception as e:
+        logger.error(f"DB Error adding to history: {e}")
+        return False, "Failed to save movie"
+
+def update_rating(username, movie_index, rating):
+    if not supabase: return False, "Database connection error"
+    try:
+        supabase.table("watch_history").update({"rating": float(rating)}).eq("username", username).eq("movie_index", int(movie_index)).execute()
+        return True, "Rating successfully updated"
+    except Exception as e:
+        logger.error(f"DB Error updating rating: {e}")
+        return False, "Failed to update rating"
+
+def remove_from_watch_history(username, movie_index):
+    if not supabase: return False, "Database connection error"
+    try:
+        supabase.table("watch_history").delete().eq("username", username).eq("movie_index", int(movie_index)).execute()
+        return True, "Movie removed from history"
+    except Exception as e:
+        logger.error(f"DB Error removing history: {e}")
+        return False, "Failed to remove movie"
