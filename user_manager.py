@@ -5,7 +5,6 @@ from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
-# Initialize Supabase Client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
@@ -18,16 +17,10 @@ else:
 def register_user(username, password):
     if not supabase: return False, "Database connection error"
     username = username.strip().lower()
-    
     try:
-        # Check if user already exists
         res = supabase.table("app_users").select("*").eq("username", username).execute()
-        if len(res.data) > 0:
-            return False, "Username already exists"
-            
-        # Hash password and save to Supabase
-        hashed_pw = generate_password_hash(password)
-        supabase.table("app_users").insert({"username": username, "password_hash": hashed_pw}).execute()
+        if len(res.data) > 0: return False, "Username already exists"
+        supabase.table("app_users").insert({"username": username, "password_hash": generate_password_hash(password)}).execute()
         return True, "Registration successful"
     except Exception as e:
         logger.error(f"DB Error during registration: {e}")
@@ -36,17 +29,10 @@ def register_user(username, password):
 def authenticate_user(username, password):
     if not supabase: return False, "Database connection error"
     username = username.strip().lower()
-    
     try:
-        # Fetch user from Supabase
         res = supabase.table("app_users").select("*").eq("username", username).execute()
-        if len(res.data) == 0:
-            return False, "Invalid username or password"
-            
-        user = res.data[0]
-        # Verify Password
-        if check_password_hash(user["password_hash"], password):
-            return True, "Login successful"
+        if len(res.data) == 0: return False, "Invalid username or password"
+        if check_password_hash(res.data[0]["password_hash"], password): return True, "Login successful"
         return False, "Invalid username or password"
     except Exception as e:
         logger.error(f"DB Error during login: {e}")
@@ -55,17 +41,15 @@ def authenticate_user(username, password):
 def get_watch_history(username):
     if not supabase: return []
     try:
-        # Fetch all saved movies for this user
         res = supabase.table("watch_history").select("*").eq("username", username).order("added_at", desc=True).execute()
-        
-        # Format the data exactly how your frontend app.js expects it
         history = []
         for row in res.data:
             history.append({
-                "index": row["movie_index"],
-                "title": row["title"],
-                "release_year": row.get("release_year", "N/A"),
-                "rating": row.get("rating")
+                "index": int(row.get("movie_index", 0)),
+                "title": str(row.get("title", "Unknown")),
+                "release_year": str(row.get("release_year", "N/A")),
+                "rating": row.get("rating"),
+                "date": row.get("added_at", "") # <--- BUG FIX: Attached the date to fix the frontend glitch!
             })
         return history
     except Exception as e:
@@ -74,13 +58,9 @@ def get_watch_history(username):
 
 def add_to_watch_history(username, movie_index, title, release_year, rating=None):
     if not supabase: return False, "Database connection error"
-    
     try:
-        # Prevent duplicate entries in the user's history
         res = supabase.table("watch_history").select("*").eq("username", username).eq("movie_index", movie_index).execute()
-        if len(res.data) > 0:
-            return False, "Movie is already in your Watch History!"
-            
+        if len(res.data) > 0: return False, "Movie is already in your Watch History!"
         data = {
             "username": username,
             "movie_index": int(movie_index),
@@ -88,8 +68,6 @@ def add_to_watch_history(username, movie_index, title, release_year, rating=None
             "release_year": str(release_year),
             "rating": float(rating) if rating else None
         }
-        
-        # Save movie directly into the Supabase database
         supabase.table("watch_history").insert(data).execute()
         return True, "Movie added to Watch History"
     except Exception as e:
