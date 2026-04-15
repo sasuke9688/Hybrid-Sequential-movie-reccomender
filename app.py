@@ -1,3 +1,7 @@
+
+
+
+
 import os
 import traceback
 import logging
@@ -5,7 +9,6 @@ from functools import wraps
 
 import pandas as pd
 import joblib
-import torch
 from flask import Flask, request, jsonify, render_template, session
 from supabase import create_client, Client
 
@@ -13,6 +16,24 @@ from config import (
     FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY, TOP_K,
     RATING_SCALE_MAX, MIN_LANGUAGE_COUNT
 )
+
+
+from config import (
+    FLASK_HOST, FLASK_PORT, FLASK_SECRET_KEY, TOP_K,
+    RATING_SCALE_MAX, MIN_LANGUAGE_COUNT
+)
+
+# Import ONLY the lightweight RecommendationEngine
+from recommendation_engine import RecommendationEngine
+from user_manager import (
+    register_user, authenticate_user,
+    add_to_watch_history, remove_from_watch_history, get_watch_history,
+    update_rating
+)
+from data_logger import log_user_interaction
+
+
+
 
 # Import your rewritten PyTorch classes
 from recommendation_engine import RecommendationEngine, DynamicHybridRecommender
