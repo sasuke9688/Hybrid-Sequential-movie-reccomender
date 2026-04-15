@@ -38,38 +38,25 @@ supabase_client = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 4. Global Engine Initialization (PyTorch Deep Learning)
+# 4. Global Engine Initialization
 engine = None
 engine_error = "No error recorded."
 
 try:
-    logger.info("Loading PyTorch artifacts and dataset...")
-    
-    # Load Scikit-Learn/Pandas Artifacts
+    logger.info("Loading lightweight ML artifacts...")
     tmdb_df = joblib.load("models/tmdb_dataset.pkl")
     mlb = joblib.load("models/mlb.pkl")
-    
-    # Load PyTorch Content Tensor (Mapped strictly to CPU to save Render RAM)
-    content_matrix = torch.load("models/item_content_matrix.pt", map_location=torch.device('cpu'))
+    tmdb_latent = joblib.load("models/tmdb_latent.pkl")
 
-    # Rebuild PyTorch Model Architecture
-    # Note: num_users matches your training script configuration
-    num_users = 1000 
-    num_items = len(tmdb_df) + 1
-    content_dim = content_matrix.shape[1]
-    
-    model = DynamicHybridRecommender(num_users=num_users, num_items=num_items, content_feature_dim=content_dim)
-    
-    # Load learned neural network weights
-    model.load_state_dict(torch.load("models/dynamic_hybrid_model.pth", map_location=torch.device('cpu')))
-
-    logger.info("Initiating Deep Learning Hybrid Engine...")
-    engine = RecommendationEngine(model, content_matrix, tmdb_df, mlb)
+    logger.info("Initiating Fast Recommendation Engine...")
+    engine = RecommendationEngine(tmdb_latent, tmdb_df, mlb)
     logger.info("Engine instantiated successfully.")
     
 except Exception as e:
     engine_error = traceback.format_exc()
     logger.error(f"FATAL: Engine initialization failed.\n{engine_error}")
+    
+
 
 
 # 5. Helper Functions
