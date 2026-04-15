@@ -208,29 +208,28 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # BULLETPROOF CLEANER: Convert all data to generic 'object' first so Pandas doesn't crash when we inject "N/A" strings
+        # BULLETPROOF CLEANER: Convert all data to generic 'object' first so Pandas doesn't crash
         recs_df = recs_df.astype(object).fillna("N/A")
         
         recommendations = recs_df.to_dict(orient="records")
         
         # Inject the exact variable names the frontend JavaScript expects
         for rec in recommendations:
-            # 1. Ensure genres is a clean string
             if isinstance(rec.get("genres"), list):
                 rec["genres"] = ", ".join(rec["genres"])
             elif str(rec.get("genres")).startswith("["):
                 rec["genres"] = str(rec.get("genres")).replace("[", "").replace("]", "").replace("'", "")
             
-            # 2. Spam every possible alias for language and rating
             lang = rec.get("original_language", "N/A")
             rec["language"] = lang
             rec["lang"] = lang
             rec["rating"] = rec.get("vote_average", "N/A")
             rec["poster_path"] = rec.get("poster_path", "")
 
+        # --- THE FIX: Send weight_info as an empty string to bypass the JavaScript .replace() crash ---
         return jsonify({
             "recommendations": recommendations,
-            "weight_info":     weight_info,
+            "weight_info":     "", 
             "auto_watched":    False, 
             "rating_prompts":  []
         })
