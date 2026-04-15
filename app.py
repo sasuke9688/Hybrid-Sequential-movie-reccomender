@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 
-# 3. Initialize Global Supabase Client
+# 3. Initialize Global Supabase Client (For Auth and History)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase_client = None
@@ -152,27 +152,38 @@ def api_genres():
 # --- Recommendation API ---
 @app.route("/api/search", methods=["GET"])
 def search_movies():
-    if not supabase_client: return jsonify({"error": "Database connection missing"}), 500
-    query = request.args.get("q", "").strip()
+    """Searches the Pandas dataframe to guarantee perfect ML Matrix index matching."""
+    if engine is None: return jsonify({"error": "Engine unavailable"}), 500
+    
+    query = request.args.get("q", "").strip().lower()
     language = request.args.get("language", "").strip()
 
     if len(query) < 2 and not language: return jsonify({"results": []})
 
     try:
-        db_query = supabase_client.table("tmdb_movies").select("*")
-        if query: db_query = db_query.ilike("title", f"%{query}%")
-        if language: db_query = db_query.eq("original_language", language)
-        response = db_query.limit(50).execute()
+        df_search = engine.tmdb_df.copy()
+        
+        # Apply Language Filter
+        if language:
+            df_search = df_search[df_search["original_language"] == language]
+            
+        # Apply Text Search Filter safely
+        if query:
+            df_search = df_search[df_search["title"].str.lower().str.contains(query, na=False)]
+
+        # Grab the top 50 results
+        df_search = df_search.head(50)
 
         results = []
-        for row in response.data:
+        # iterrows() naturally provides the exact index number the ML Engine needs!
+        for idx, row in df_search.iterrows():
             release_date = str(row.get("release_date", ""))
             release_year = release_date.split("-")[0] if release_date and release_date != "nan" else "N/A"
             lang = row.get("original_language", "N/A")
             rating = row.get("vote_average", "N/A")
 
             results.append({
-                "index": int(row.get("pandas_index", 0)), 
+                "index": int(idx), 
                 "title": row.get("title", "Unknown Title"),
                 "release_year": release_year,
                 "genres": row.get("genres", ""),
@@ -183,9 +194,10 @@ def search_movies():
                 "language": lang,
                 "lang": lang
             })
+            
         return jsonify({"results": results})
     except Exception as e:
-        logger.error(f"Supabase search failed: {e}")
+        logger.error(f"Pandas search failed: {e}")
         return jsonify({"error": "Database search failed"}), 500
 
 @app.route("/api/recommend", methods=["POST"])
@@ -211,35 +223,29 @@ def recommend():
         recs_df = recs_df.astype(object).fillna("N/A")
         recommendations = recs_df.to_dict(orient="records")
         
-        # FINAL UI FIXES: Push all exact aliases the frontend wants
         for i, rec in enumerate(recommendations):
-            # 1. Clean Genres
             if isinstance(rec.get("genres"), list):
                 rec["genres"] = ", ".join(rec["genres"])
             elif str(rec.get("genres")).startswith("["):
                 rec["genres"] = str(rec.get("genres")).replace("[", "").replace("]", "").replace("'", "")
             
-            # 2. Languages & Ratings
             lang = rec.get("original_language", "N/A")
             rec["language"] = lang
             rec["lang"] = lang
             rec["rating"] = rec.get("vote_average", "N/A")
             rec["popularity"] = rec.get("popularity", "N/A")
             
-            # 3. Year Extraction
             release_date = str(rec.get("release_date", ""))
             release_year = release_date.split("-")[0] if release_date and release_date != "nan" and release_date != "N/A" else "N/A"
             rec["release_year"] = release_year
             rec["year"] = release_year
             
-            # 4. Score Formatting (Round to 3 decimals)
             score_val = rec.get("hybrid_score", "N/A")
             if isinstance(score_val, float):
                 rec["score"] = round(score_val, 3)
             else:
                 rec["score"] = score_val
 
-            # 5. Big Blue Rank Number
             rec["rank"] = f"#{i + 1}"
 
         return jsonify({
