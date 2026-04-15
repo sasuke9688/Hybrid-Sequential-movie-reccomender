@@ -11,5 +11,5 @@ python-dotenv>=1.0.0
 gunicorn>=21.2.0
 kaggle
 
-pandas==2.0.3
+pandas
 numpy==1.24.3
