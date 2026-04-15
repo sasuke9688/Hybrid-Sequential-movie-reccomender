@@ -159,7 +159,6 @@ def search_movies():
     
     query = request.args.get("q", "").strip().lower()
     language = request.args.get("language", "").strip()
-    
     hide_adult = request.args.get("hide_adult", "false").lower() == "true"
 
     if len(query) < 2 and not language: return jsonify({"results": []})
@@ -203,32 +202,48 @@ def search_movies():
 
 @app.route("/api/recommend", methods=["POST"])
 def recommend():
-    # FIX: Send weight_info so JS doesn't crash if engine is offline
     if engine is None: return jsonify({"error": "Engine unavailable", "weight_info": ""}), 500
     
     data = request.get_json()
     if not data or "movies" not in data: 
         return jsonify({"error": "No movies provided", "weight_info": ""}), 400
 
-    selected_movies = data["movies"]
-    if not selected_movies: 
+    raw_selected_movies = data["movies"]
+    if not raw_selected_movies: 
         return jsonify({"error": "Please select at least one movie", "weight_info": ""}), 400
 
     watch_history = get_watch_history(session["username"]) if "username" in session else None
 
     try:
         max_idx = len(engine.tmdb_df) - 1
+        
+        # --- THE FIX: Force every ID into a pure Math Integer ---
+        clean_selected = []
+        for m in raw_selected_movies:
+            try:
+                idx_int = int(m.get("index", -1))
+                if 0 <= idx_int <= max_idx:
+                    m["index"] = idx_int
+                    clean_selected.append(m)
+            except: pass
+        selected_movies = clean_selected
+
+        clean_history = []
         if watch_history:
-            watch_history = [m for m in watch_history if 0 <= int(m.get("index", -1)) <= max_idx]
-        selected_movies = [m for m in selected_movies if 0 <= int(m.get("index", -1)) <= max_idx]
+            for m in watch_history:
+                try:
+                    idx_int = int(m.get("index", -1))
+                    if 0 <= idx_int <= max_idx:
+                        m["index"] = idx_int
+                        clean_history.append(m)
+                except: pass
+            watch_history = clean_history
+        # --------------------------------------------------------
         
         if not selected_movies:
             return jsonify({"error": "Corrupted IDs detected. Please re-search your movies.", "weight_info": ""}), 400
 
-        # FIX: Force requested_k to be a pure integer to stop Python math crashes!
         requested_k = int(data.get("top_k", TOP_K) or 10)
-        
-        # FIX: Safely parse hide_adult string
         hide_adult = str(data.get("hide_adult", "false")).lower() == "true"
         
         recs_df, _ = engine.recommend(
@@ -302,11 +317,9 @@ def recommend():
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Recommendation calculation failed: {e}")
-        # THE MASTER FIX: Always send weight_info so JS never crashes on .replace()
-        # This guarantees the TRUE error message will show up on your screen!
         return jsonify({
             "error": f"Server Error: {str(e)}", 
-            "weight_info": ""
+            "weight_info": "" 
         }), 500
 
 @app.route("/api/stats", methods=["GET"])
