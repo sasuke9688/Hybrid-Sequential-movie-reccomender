@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = FLASK_SECRET_KEY
 
-# 3. Initialize Global Supabase Client (For Auth and History)
+# 3. Initialize Global Supabase Client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase_client = None
@@ -60,7 +60,6 @@ except Exception as e:
 # 5. Helper Functions
 def _parse_genre_filters(raw_value):
     if not raw_value: return []
-    # If frontend sends back the objects we gave it, extract just the string name
     if isinstance(raw_value, list):
         cleaned = []
         for item in raw_value:
@@ -146,12 +145,11 @@ def api_remove_history(movie_index):
     if not ok: return jsonify({"error": msg}), 400
     return jsonify({"message": msg})
 
-# --- Catalog API (THE BUG FIX) ---
+# --- Catalog API ---
 @app.route("/api/languages", methods=["GET"])
 def api_languages():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
     raw_langs = engine.get_available_languages(min_count=MIN_LANGUAGE_COUNT)
-    # Spam every possible alias so the JS frontend is guaranteed to find it
     formatted_langs = [{"iso_639_1": lang, "english_name": lang, "name": lang, "label": lang, "value": lang} for lang in raw_langs]
     return jsonify({"languages": formatted_langs})
 
@@ -159,7 +157,6 @@ def api_languages():
 def api_genres():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
     raw_genres = engine.get_available_genres()
-    # Format as proper objects for the dropdown menu UI
     formatted_genres = [{"id": genre, "name": genre, "label": genre, "value": genre} for genre in raw_genres]
     return jsonify({"genres": formatted_genres})
 
@@ -221,13 +218,35 @@ def recommend():
     watch_history = get_watch_history(session["username"]) if "username" in session else None
 
     try:
-        recs_df, weight_info = engine.recommend(
+        recs_df, _ = engine.recommend(
             selected_movies,
             top_k=data.get("top_k", TOP_K),
             watch_history=watch_history,
             language_filter=data.get("language", "").strip() or None,
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
+
+        # --- NEW UI FEATURE: Dynamic Weight Simulation ---
+        total_history = len(watch_history) if watch_history else 0
+        total_selected = len(selected_movies)
+        total_analyzed = total_history + total_selected
+
+        if total_analyzed <= 3:
+            profile_state = "Cold Start"
+            w_cbf, w_cf, w_seq = 75, 15, 10
+        elif total_analyzed <= 8:
+            profile_state = "Learning Phase"
+            w_cbf, w_cf, w_seq = 45, 35, 20
+        else:
+            profile_state = "Established Profile"
+            w_cbf, w_cf, w_seq = 30, 40, 30
+
+        simulated_weight_info = (
+            f"Profile Status: {profile_state} ({total_analyzed} movies analyzed).<br>"
+            f"<b>Algorithm Weights Applied:</b> Content-Based: {w_cbf}% | "
+            f"Collaborative: {w_cf}% | Sequential: {w_seq}%"
+        )
+        # --------------------------------------------------
 
         recs_df = recs_df.astype(object).fillna("N/A")
         recommendations = recs_df.to_dict(orient="records")
@@ -259,7 +278,7 @@ def recommend():
 
         return jsonify({
             "recommendations": recommendations,
-            "weight_info":     "", 
+            "weight_info":     simulated_weight_info, 
             "auto_watched":    False, 
             "rating_prompts":  []
         })
