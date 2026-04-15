@@ -159,14 +159,17 @@ def search_movies():
     
     query = request.args.get("q", "").strip().lower()
     language = request.args.get("language", "").strip()
+    
+    # Check if the frontend wants us to hide adult content (Defaults to False if not provided)
+    hide_adult = request.args.get("hide_adult", "false").lower() == "true"
 
     if len(query) < 2 and not language: return jsonify({"results": []})
 
     try:
         df_search = engine.tmdb_df.copy()
         
-        # --- FEATURE: The Adult Filter (Strips out 18+ Content) ---
-        if "adult" in df_search.columns:
+        # --- OPTIONAL ADULT FILTER ---
+        if hide_adult and "adult" in df_search.columns:
             df_search = df_search[~df_search["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
             
         if language: df_search = df_search[df_search["original_language"] == language]
@@ -197,7 +200,7 @@ def search_movies():
         return jsonify({"results": results})
     except Exception as e:
         logger.error(f"Pandas search failed: {e}")
-        return jsonify({"error": "Database search failed"}), 500
+        return jsonify({"error": f"Search Crash: {str(e)}"}), 500
 
 @app.route("/api/recommend", methods=["POST"])
 def recommend():
@@ -211,8 +214,20 @@ def recommend():
     watch_history = get_watch_history(session["username"]) if "username" in session else None
 
     try:
-        # Ask for extra recommendations just in case we have to filter out adult ones
+        # --- BULLETPROOF CORRUPT DATA SAFEGUARD ---
+        # If any movie in the history or selected list has an ID that doesn't exist, ignore it.
+        max_idx = len(engine.tmdb_df) - 1
+        if watch_history:
+            watch_history = [m for m in watch_history if 0 <= int(m.get("index", -1)) <= max_idx]
+        selected_movies = [m for m in selected_movies if 0 <= int(m.get("index", -1)) <= max_idx]
+        
+        # If all selected movies were corrupted and removed, stop the engine from running on empty
+        if not selected_movies:
+            return jsonify({"error": "The selected movies had corrupted IDs. Please search and select them again."}), 400
+        # ------------------------------------------
+
         requested_k = data.get("top_k", TOP_K)
+        hide_adult = data.get("hide_adult", False)
         
         recs_df, _ = engine.recommend(
             selected_movies,
@@ -222,11 +237,10 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # --- FEATURE: Adult Filter for the Output Recommendations ---
-        if "adult" in recs_df.columns:
+        # --- OPTIONAL ADULT FILTER ---
+        if hide_adult and "adult" in recs_df.columns:
             recs_df = recs_df[~recs_df["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
             
-        # Trim back down to the exact top 10 you requested
         recs_df = recs_df.head(requested_k)
 
         total_history = len(watch_history) if watch_history else 0
@@ -287,7 +301,8 @@ def recommend():
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Recommendation calculation failed: {e}")
-        return jsonify({"error": "Failed to generate recommendations. Please try again."}), 500
+        # Send the exact Python error back to the frontend popup!
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
