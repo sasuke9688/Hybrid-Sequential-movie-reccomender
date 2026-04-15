@@ -243,7 +243,11 @@ function renderHistory(history) {
     }
 
     historyList.innerHTML = history.map((item) => {
-        const watchedOn = new Date(item.timestamp * 1000).toLocaleDateString("en-US", {
+        // Fallback for valid JS date parsing
+        let dateObj = new Date(item.date);
+        if (isNaN(dateObj.getTime())) dateObj = new Date(); // Fallback if date is missing
+        
+        const watchedOn = dateObj.toLocaleDateString("en-US", {
             year: "numeric",
             month: "short",
             day: "numeric",
@@ -364,8 +368,8 @@ function populateLanguageOptions(languages) {
 
     languages.forEach((language) => {
         const option = document.createElement("option");
-        option.value = language.code;
-        option.textContent = `${language.label} (${language.count})`;
+        option.value = language.code || language.iso_639_1 || language.name;
+        option.textContent = `${language.label || language.name} ${language.count ? `(${language.count})` : ""}`;
         languageFilter.appendChild(option);
     });
 }
@@ -382,7 +386,7 @@ function populateGenreOptions(genres) {
         input.value = genre.name;
 
         const text = document.createElement("span");
-        text.textContent = `${genre.name} (${genre.count})`;
+        text.textContent = `${genre.name} ${genre.count ? `(${genre.count})` : ""}`;
 
         label.appendChild(input);
         label.appendChild(text);
@@ -452,6 +456,11 @@ async function fetchSearchResults(query) {
         if (activeFilters.genres.length > 0) {
             params.set("genres", activeFilters.genres.join(","));
         }
+        
+        // --- ADULT FILTER CHECK ---
+        const hideAdultCheckbox = document.getElementById("hideAdult");
+        const hideAdult = hideAdultCheckbox ? hideAdultCheckbox.checked : true;
+        params.set("hide_adult", hideAdult);
 
         const res = await fetch(`/api/search?${params.toString()}`);
         const data = await res.json();
@@ -559,6 +568,10 @@ async function submitRecommendationRequest() {
     recommendationsSection.style.display = "none";
 
     try {
+        // --- ADULT FILTER CHECK ---
+        const hideAdultCheckbox = document.getElementById("hideAdult");
+        const hideAdult = hideAdultCheckbox ? hideAdultCheckbox.checked : true;
+
         const payload = {
             movies: selectedMovies.map((movie) => ({
                 index: movie.index,
@@ -569,6 +582,7 @@ async function submitRecommendationRequest() {
             top_k: 10,
             language: activeFilters.language,
             genres: activeFilters.genres,
+            hide_adult: hideAdult
         };
 
         const res = await fetch("/api/recommend", {
@@ -580,6 +594,8 @@ async function submitRecommendationRequest() {
 
         if (!res.ok || data.error) {
             alert(data.error || "Failed to get recommendations.");
+            loadingEl.style.display = "none";
+            recommendBtn.disabled = selectedMovies.length === 0;
             return;
         }
 
@@ -598,6 +614,7 @@ async function submitRecommendationRequest() {
     }
 }
 
+// --- THE BUG FIX: Safely render the new HTML text string without crashing ---
 function renderWeightInfo(info) {
     if (!info) {
         weightInfoEl.style.display = "none";
@@ -605,33 +622,13 @@ function renderWeightInfo(info) {
         return;
     }
 
+    // Display the simulated string we generated in Python
     weightInfoEl.innerHTML = `
-        <div class="regime-label">${escapeHtml(info.regime.replace(/_/g, " "))}</div>
-        <div>${escapeHtml(info.regime_description)}</div>
-        <div class="weight-context">
-            Signals: ${info.total_watched} | Current selection: ${info.current_selection_count || 0} | Recent: ${info.recent_2mo}
-        </div>
-        <div class="weight-bars">
-            ${renderWeightBar("Collaborative", "collab", info.alpha)}
-            ${renderWeightBar("Content", "content", info.beta)}
-            ${renderWeightBar("Sequential", "sequential", info.gamma)}
-            ${renderWeightBar("Popularity", "popularity", info.delta)}
+        <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 14px; color: #cbd5e1;">
+            ${info}
         </div>
     `;
     weightInfoEl.style.display = "block";
-}
-
-function renderWeightBar(label, key, value) {
-    const percent = Math.round((value || 0) * 100);
-    return `
-        <div class="weight-bar">
-            <span class="weight-bar-label">${label}</span>
-            <span class="weight-bar-track">
-                <span class="weight-bar-fill ${key}" style="width:${percent}%"></span>
-            </span>
-            <span class="weight-bar-pct">${percent}%</span>
-        </div>
-    `;
 }
 
 function renderRecommendations(recommendations) {
@@ -655,19 +652,19 @@ function renderRecommendations(recommendations) {
         const actionLabel = currentUser ? "Mark as Watched" : "Log in to track";
 
         card.innerHTML = `
-            <div class="rec-rank">${recommendation.rank}</div>
+            <div class="rec-rank">${recommendation.rank || ""}</div>
             <div class="rec-info">
-                <div class="rec-title">${escapeHtml(recommendation.title)}</div>
+                <div class="rec-title">${escapeHtml(recommendation.title || "Unknown")}</div>
                 <div class="rec-meta">
-                    <span>Year: ${recommendation.release_year}</span>
-                    <span>Rating: ${recommendation.vote_average}</span>
-                    <span>Popularity: ${recommendation.popularity}</span>
+                    <span>Year: ${recommendation.release_year || "N/A"}</span>
+                    <span>Rating: ${recommendation.vote_average || "N/A"}</span>
+                    <span>Popularity: ${recommendation.popularity || "N/A"}</span>
                     <span>Lang: ${escapeHtml((recommendation.language || "N/A").toUpperCase())}</span>
                 </div>
                 <div class="rec-genres">
                     ${genres.map((genre) => `<span class="genre-tag">${escapeHtml(genre)}</span>`).join("")}
                 </div>
-                <div class="rec-score">Score: ${recommendation.score}</div>
+                <div class="rec-score">Score: ${recommendation.score || "N/A"}</div>
                 <div class="rec-actions">
                     <button class="btn-watched watch-btn" data-index="${recommendation.index}">${actionLabel}</button>
                 </div>
@@ -854,7 +851,6 @@ function setRatingStars(value) {
         return;
     }
 
-    // 1. Optimistic Update: Bind the rating to local state immediately
     if (typeof currentRatingContext.onRated === "function") {
         currentRatingContext.onRated(currentRatingValue);
     }
@@ -863,7 +859,6 @@ function setRatingStars(value) {
         updateWatchButtonState(currentRatingContext.buttonEl, currentRatingValue);
     }
 
-    // 2. Execute the backend save asynchronously
     const saved = await saveMovieRating(currentRatingContext.index, currentRatingValue);
 
     if (saved && historyModal.style.display === "flex") {
