@@ -208,25 +208,40 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # BULLETPROOF CLEANER: Convert all data to generic 'object' first so Pandas doesn't crash
         recs_df = recs_df.astype(object).fillna("N/A")
-        
         recommendations = recs_df.to_dict(orient="records")
         
-        # Inject the exact variable names the frontend JavaScript expects
-        for rec in recommendations:
+        # FINAL UI FIXES: Push all exact aliases the frontend wants
+        for i, rec in enumerate(recommendations):
+            # 1. Clean Genres
             if isinstance(rec.get("genres"), list):
                 rec["genres"] = ", ".join(rec["genres"])
             elif str(rec.get("genres")).startswith("["):
                 rec["genres"] = str(rec.get("genres")).replace("[", "").replace("]", "").replace("'", "")
             
+            # 2. Languages & Ratings
             lang = rec.get("original_language", "N/A")
             rec["language"] = lang
             rec["lang"] = lang
             rec["rating"] = rec.get("vote_average", "N/A")
-            rec["poster_path"] = rec.get("poster_path", "")
+            rec["popularity"] = rec.get("popularity", "N/A")
+            
+            # 3. Year Extraction
+            release_date = str(rec.get("release_date", ""))
+            release_year = release_date.split("-")[0] if release_date and release_date != "nan" and release_date != "N/A" else "N/A"
+            rec["release_year"] = release_year
+            rec["year"] = release_year
+            
+            # 4. Score Formatting (Round to 3 decimals)
+            score_val = rec.get("hybrid_score", "N/A")
+            if isinstance(score_val, float):
+                rec["score"] = round(score_val, 3)
+            else:
+                rec["score"] = score_val
 
-        # --- THE FIX: Send weight_info as an empty string to bypass the JavaScript .replace() crash ---
+            # 5. Big Blue Rank Number
+            rec["rank"] = f"#{i + 1}"
+
         return jsonify({
             "recommendations": recommendations,
             "weight_info":     "", 
