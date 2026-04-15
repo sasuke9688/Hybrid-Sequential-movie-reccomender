@@ -12,4 +12,4 @@ gunicorn>=21.2.0
 kaggle
 
 pandas
-numpy==1.24.3
+numpy
