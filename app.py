@@ -3,6 +3,7 @@ import traceback
 import logging
 from functools import wraps
 
+import numpy as np
 import pandas as pd
 import joblib
 from flask import Flask, request, jsonify, render_template, session
@@ -183,18 +184,26 @@ def search_movies():
 
         results = []
         for row in response.data:
-            # Safely extract the year from the YYYY-MM-DD string
             release_date = str(row.get("release_date", ""))
             release_year = release_date.split("-")[0] if release_date and release_date != "nan" else "N/A"
+            
+            # Extract common stats
+            lang = row.get("original_language", "N/A")
+            rating = row.get("vote_average", "N/A")
+            pop = row.get("popularity", "N/A")
 
             results.append({
                 "index": int(row.get("pandas_index", 0)), 
                 "title": row.get("title", "Unknown Title"),
                 "release_year": release_year,
                 "genres": row.get("genres", ""),
-                "vote_average": row.get("vote_average", "N/A"),
-                "popularity": row.get("popularity", "N/A"),
-                "original_language": row.get("original_language", "N/A")
+                # Send multiple variations to guarantee the frontend catches it
+                "vote_average": rating,
+                "rating": rating,
+                "popularity": pop,
+                "original_language": lang,
+                "language": lang,
+                "lang": lang
             })
         return jsonify({"results": results})
     except Exception as e:
@@ -221,8 +230,8 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # Scrub all 'NaN' values from the Pandas dataframe before JSON conversion
-        recs_df = recs_df.fillna("N/A")
+        # BUG FIX: The ultimate Pandas JSON cleaner. Replaces all NaN/Infinity with native Python 'None' (null)
+        recs_df = recs_df.replace([np.inf, -np.inf, np.nan], None)
 
         recommendations = recs_df.to_dict(orient="records")
         for rec in recommendations:
@@ -237,6 +246,8 @@ def recommend():
         })
 
     except Exception as e:
+        # EMERGENCY LOGGER: Prints the exact crash line to Render Logs
+        traceback.print_exc()
         logger.error(f"Recommendation calculation failed: {e}")
         return jsonify({"error": "Failed to generate recommendations. Please try again."}), 500
 
