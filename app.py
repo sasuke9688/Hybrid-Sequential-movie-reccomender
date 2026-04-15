@@ -38,7 +38,7 @@ supabase_client = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 4. Global Engine Initialization (Lightweight Scikit-Learn)
+# 4. Global Engine Initialization
 engine = None
 engine_error = "No error recorded."
 
@@ -59,19 +59,14 @@ except Exception as e:
 
 # 5. Helper Functions
 def _parse_genre_filters(raw_value):
-    if not raw_value:
-        return []
-    if isinstance(raw_value, list):
-        values = raw_value
-    else:
-        values = str(raw_value).split(",")
-    return [str(value).strip() for value in values if str(value).strip()]
+    if not raw_value: return []
+    if isinstance(raw_value, list): return raw_value
+    return [str(value).strip() for value in str(raw_value).split(",") if str(value).strip()]
 
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if "username" not in session:
-            return jsonify({"error": "Login required"}), 401
+        if "username" not in session: return jsonify({"error": "Login required"}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -79,8 +74,7 @@ def login_required(f):
 # 6. Routing Definitions
 @app.route('/debug')
 def debug_boot():
-    if engine is None:
-        return f"<h1>Engine Failed to Boot</h1><hr><pre>{engine_error}</pre>"
+    if engine is None: return f"<h1>Engine Failed to Boot</h1><hr><pre>{engine_error}</pre>"
     return "<h1>Engine Loaded Successfully!</h1>"
 
 @app.route("/")
@@ -92,23 +86,19 @@ def index():
 def api_register():
     data = request.get_json()
     if not data: return jsonify({"error": "No data provided"}), 400
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-    ok, msg = register_user(username, password)
+    ok, msg = register_user(data.get("username", "").strip(), data.get("password", ""))
     if not ok: return jsonify({"error": msg}), 400
-    session["username"] = username.lower()
-    return jsonify({"message": msg, "username": username.lower()})
+    session["username"] = data.get("username", "").strip().lower()
+    return jsonify({"message": msg, "username": session["username"]})
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
     data = request.get_json()
     if not data: return jsonify({"error": "No data provided"}), 400
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-    ok, msg = authenticate_user(username, password)
+    ok, msg = authenticate_user(data.get("username", "").strip(), data.get("password", ""))
     if not ok: return jsonify({"error": msg}), 401
-    session["username"] = username.lower()
-    return jsonify({"message": msg, "username": username.lower()})
+    session["username"] = data.get("username", "").strip().lower()
+    return jsonify({"message": msg, "username": session["username"]})
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
@@ -117,23 +107,19 @@ def api_logout():
 
 @app.route("/api/me", methods=["GET"])
 def api_me():
-    if "username" in session:
-        return jsonify({"logged_in": True, "username": session["username"]})
+    if "username" in session: return jsonify({"logged_in": True, "username": session["username"]})
     return jsonify({"logged_in": False})
 
 # --- Watch History API ---
 @app.route("/api/history", methods=["GET"])
 @login_required
 def api_get_history():
-    history = get_watch_history(session["username"])
-    return jsonify({"history": history})
+    return jsonify({"history": get_watch_history(session["username"])})
 
 @app.route("/api/history", methods=["POST"])
 @login_required
 def api_add_history():
     data = request.get_json()
-    if not data or "index" not in data or "title" not in data:
-        return jsonify({"error": "index and title required"}), 400
     ok, msg = add_to_watch_history(session["username"], data["index"], data["title"], data.get("release_year", 0), data.get("rating"))
     if not ok: return jsonify({"error": msg}), 400
     return jsonify({"message": msg})
@@ -141,10 +127,7 @@ def api_add_history():
 @app.route("/api/history/<int:movie_index>/rating", methods=["PUT"])
 @login_required
 def api_update_rating(movie_index):
-    data = request.get_json()
-    if not data or "rating" not in data:
-        return jsonify({"error": "rating required"}), 400
-    ok, msg = update_rating(session["username"], movie_index, data["rating"])
+    ok, msg = update_rating(session["username"], movie_index, request.get_json()["rating"])
     if not ok: return jsonify({"error": msg}), 400
     return jsonify({"message": msg})
 
@@ -173,8 +156,7 @@ def search_movies():
     query = request.args.get("q", "").strip()
     language = request.args.get("language", "").strip()
 
-    if len(query) < 2 and not language:
-        return jsonify({"results": []})
+    if len(query) < 2 and not language: return jsonify({"results": []})
 
     try:
         db_query = supabase_client.table("tmdb_movies").select("*")
@@ -186,21 +168,17 @@ def search_movies():
         for row in response.data:
             release_date = str(row.get("release_date", ""))
             release_year = release_date.split("-")[0] if release_date and release_date != "nan" else "N/A"
-            
-            # Extract common stats
             lang = row.get("original_language", "N/A")
             rating = row.get("vote_average", "N/A")
-            pop = row.get("popularity", "N/A")
 
             results.append({
                 "index": int(row.get("pandas_index", 0)), 
                 "title": row.get("title", "Unknown Title"),
                 "release_year": release_year,
                 "genres": row.get("genres", ""),
-                # Send multiple variations to guarantee the frontend catches it
                 "vote_average": rating,
                 "rating": rating,
-                "popularity": pop,
+                "popularity": row.get("popularity", "N/A"),
                 "original_language": lang,
                 "language": lang,
                 "lang": lang
@@ -230,13 +208,25 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # BUG FIX: The ultimate Pandas JSON cleaner. Replaces all NaN/Infinity with native Python 'None' (null)
-        recs_df = recs_df.replace([np.inf, -np.inf, np.nan], None)
-
+        # BULLETPROOF CLEANER: Convert all data to generic 'object' first so Pandas doesn't crash when we inject "N/A" strings
+        recs_df = recs_df.astype(object).fillna("N/A")
+        
         recommendations = recs_df.to_dict(orient="records")
+        
+        # Inject the exact variable names the frontend JavaScript expects
         for rec in recommendations:
-            if isinstance(rec["genres"], list):
+            # 1. Ensure genres is a clean string
+            if isinstance(rec.get("genres"), list):
                 rec["genres"] = ", ".join(rec["genres"])
+            elif str(rec.get("genres")).startswith("["):
+                rec["genres"] = str(rec.get("genres")).replace("[", "").replace("]", "").replace("'", "")
+            
+            # 2. Spam every possible alias for language and rating
+            lang = rec.get("original_language", "N/A")
+            rec["language"] = lang
+            rec["lang"] = lang
+            rec["rating"] = rec.get("vote_average", "N/A")
+            rec["poster_path"] = rec.get("poster_path", "")
 
         return jsonify({
             "recommendations": recommendations,
@@ -246,7 +236,6 @@ def recommend():
         })
 
     except Exception as e:
-        # EMERGENCY LOGGER: Prints the exact crash line to Render Logs
         traceback.print_exc()
         logger.error(f"Recommendation calculation failed: {e}")
         return jsonify({"error": "Failed to generate recommendations. Please try again."}), 500
