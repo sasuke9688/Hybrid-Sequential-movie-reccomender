@@ -14,14 +14,12 @@ from config import (
     RATING_SCALE_MAX, MIN_LANGUAGE_COUNT
 )
 
-# Import ONLY the lightweight RecommendationEngine
 from recommendation_engine import RecommendationEngine
 from user_manager import (
     register_user, authenticate_user,
     add_to_watch_history, remove_from_watch_history, get_watch_history,
     update_rating
 )
-from data_logger import log_user_interaction
 
 # 1. Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -57,7 +55,6 @@ except Exception as e:
     logger.error(f"FATAL: Engine initialization failed.\n{engine_error}")
 
 
-# 5. Helper Functions
 def _parse_genre_filters(raw_value):
     if not raw_value: return []
     if isinstance(raw_value, list):
@@ -78,7 +75,6 @@ def login_required(f):
     return decorated
 
 
-# 6. Routing Definitions
 @app.route('/debug')
 def debug_boot():
     if engine is None: return f"<h1>Engine Failed to Boot</h1><hr><pre>{engine_error}</pre>"
@@ -88,7 +84,6 @@ def debug_boot():
 def index():
     return render_template("index.html")
 
-# --- Auth API ---
 @app.route("/api/register", methods=["POST"])
 def api_register():
     data = request.get_json()
@@ -117,7 +112,6 @@ def api_me():
     if "username" in session: return jsonify({"logged_in": True, "username": session["username"]})
     return jsonify({"logged_in": False})
 
-# --- Watch History API ---
 @app.route("/api/history", methods=["GET"])
 @login_required
 def api_get_history():
@@ -145,7 +139,6 @@ def api_remove_history(movie_index):
     if not ok: return jsonify({"error": msg}), 400
     return jsonify({"message": msg})
 
-# --- Catalog API ---
 @app.route("/api/languages", methods=["GET"])
 def api_languages():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
@@ -160,7 +153,6 @@ def api_genres():
     formatted_genres = [{"id": genre, "name": genre, "label": genre, "value": genre} for genre in raw_genres]
     return jsonify({"genres": formatted_genres})
 
-# --- Recommendation API ---
 @app.route("/api/search", methods=["GET"])
 def search_movies():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
@@ -173,11 +165,12 @@ def search_movies():
     try:
         df_search = engine.tmdb_df.copy()
         
-        if language:
-            df_search = df_search[df_search["original_language"] == language]
+        # --- FEATURE: The Adult Filter (Strips out 18+ Content) ---
+        if "adult" in df_search.columns:
+            df_search = df_search[~df_search["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
             
-        if query:
-            df_search = df_search[df_search["title"].str.lower().str.contains(query, na=False)]
+        if language: df_search = df_search[df_search["original_language"] == language]
+        if query: df_search = df_search[df_search["title"].str.lower().str.contains(query, na=False)]
 
         df_search = df_search.head(50)
 
@@ -218,15 +211,24 @@ def recommend():
     watch_history = get_watch_history(session["username"]) if "username" in session else None
 
     try:
+        # Ask for extra recommendations just in case we have to filter out adult ones
+        requested_k = data.get("top_k", TOP_K)
+        
         recs_df, _ = engine.recommend(
             selected_movies,
-            top_k=data.get("top_k", TOP_K),
+            top_k=requested_k + 20, 
             watch_history=watch_history,
             language_filter=data.get("language", "").strip() or None,
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # --- NEW UI FEATURE: Dynamic Weight Simulation ---
+        # --- FEATURE: Adult Filter for the Output Recommendations ---
+        if "adult" in recs_df.columns:
+            recs_df = recs_df[~recs_df["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
+            
+        # Trim back down to the exact top 10 you requested
+        recs_df = recs_df.head(requested_k)
+
         total_history = len(watch_history) if watch_history else 0
         total_selected = len(selected_movies)
         total_analyzed = total_history + total_selected
@@ -246,7 +248,6 @@ def recommend():
             f"<b>Algorithm Weights Applied:</b> Content-Based: {w_cbf}% | "
             f"Collaborative: {w_cf}% | Sequential: {w_seq}%"
         )
-        # --------------------------------------------------
 
         recs_df = recs_df.astype(object).fillna("N/A")
         recommendations = recs_df.to_dict(orient="records")
