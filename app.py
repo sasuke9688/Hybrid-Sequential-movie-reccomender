@@ -60,7 +60,15 @@ except Exception as e:
 # 5. Helper Functions
 def _parse_genre_filters(raw_value):
     if not raw_value: return []
-    if isinstance(raw_value, list): return raw_value
+    # If frontend sends back the objects we gave it, extract just the string name
+    if isinstance(raw_value, list):
+        cleaned = []
+        for item in raw_value:
+            if isinstance(item, dict):
+                cleaned.append(str(item.get("name", item.get("id", ""))))
+            else:
+                cleaned.append(str(item))
+        return cleaned
     return [str(value).strip() for value in str(raw_value).split(",") if str(value).strip()]
 
 def login_required(f):
@@ -138,21 +146,26 @@ def api_remove_history(movie_index):
     if not ok: return jsonify({"error": msg}), 400
     return jsonify({"message": msg})
 
-# --- Catalog API ---
+# --- Catalog API (THE BUG FIX) ---
 @app.route("/api/languages", methods=["GET"])
 def api_languages():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
-    return jsonify({"languages": engine.get_available_languages(min_count=MIN_LANGUAGE_COUNT)})
+    raw_langs = engine.get_available_languages(min_count=MIN_LANGUAGE_COUNT)
+    # Spam every possible alias so the JS frontend is guaranteed to find it
+    formatted_langs = [{"iso_639_1": lang, "english_name": lang, "name": lang, "label": lang, "value": lang} for lang in raw_langs]
+    return jsonify({"languages": formatted_langs})
 
 @app.route("/api/genres", methods=["GET"])
 def api_genres():
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
-    return jsonify({"genres": engine.get_available_genres()})
+    raw_genres = engine.get_available_genres()
+    # Format as proper objects for the dropdown menu UI
+    formatted_genres = [{"id": genre, "name": genre, "label": genre, "value": genre} for genre in raw_genres]
+    return jsonify({"genres": formatted_genres})
 
 # --- Recommendation API ---
 @app.route("/api/search", methods=["GET"])
 def search_movies():
-    """Searches the Pandas dataframe to guarantee perfect ML Matrix index matching."""
     if engine is None: return jsonify({"error": "Engine unavailable"}), 500
     
     query = request.args.get("q", "").strip().lower()
@@ -163,19 +176,15 @@ def search_movies():
     try:
         df_search = engine.tmdb_df.copy()
         
-        # Apply Language Filter
         if language:
             df_search = df_search[df_search["original_language"] == language]
             
-        # Apply Text Search Filter safely
         if query:
             df_search = df_search[df_search["title"].str.lower().str.contains(query, na=False)]
 
-        # Grab the top 50 results
         df_search = df_search.head(50)
 
         results = []
-        # iterrows() naturally provides the exact index number the ML Engine needs!
         for idx, row in df_search.iterrows():
             release_date = str(row.get("release_date", ""))
             release_year = release_date.split("-")[0] if release_date and release_date != "nan" else "N/A"
