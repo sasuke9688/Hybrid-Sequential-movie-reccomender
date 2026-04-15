@@ -160,7 +160,6 @@ def search_movies():
     query = request.args.get("q", "").strip().lower()
     language = request.args.get("language", "").strip()
     
-    # Check if the frontend wants us to hide adult content (Defaults to False if not provided)
     hide_adult = request.args.get("hide_adult", "false").lower() == "true"
 
     if len(query) < 2 and not language: return jsonify({"results": []})
@@ -168,7 +167,6 @@ def search_movies():
     try:
         df_search = engine.tmdb_df.copy()
         
-        # --- OPTIONAL ADULT FILTER ---
         if hide_adult and "adult" in df_search.columns:
             df_search = df_search[~df_search["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
             
@@ -202,32 +200,36 @@ def search_movies():
         logger.error(f"Pandas search failed: {e}")
         return jsonify({"error": f"Search Crash: {str(e)}"}), 500
 
+
 @app.route("/api/recommend", methods=["POST"])
 def recommend():
-    if engine is None: return jsonify({"error": "Engine unavailable"}), 500
+    # FIX: Send weight_info so JS doesn't crash if engine is offline
+    if engine is None: return jsonify({"error": "Engine unavailable", "weight_info": ""}), 500
+    
     data = request.get_json()
-    if not data or "movies" not in data: return jsonify({"error": "No movies provided"}), 400
+    if not data or "movies" not in data: 
+        return jsonify({"error": "No movies provided", "weight_info": ""}), 400
 
     selected_movies = data["movies"]
-    if not selected_movies: return jsonify({"error": "Please select at least one movie"}), 400
+    if not selected_movies: 
+        return jsonify({"error": "Please select at least one movie", "weight_info": ""}), 400
 
     watch_history = get_watch_history(session["username"]) if "username" in session else None
 
     try:
-        # --- BULLETPROOF CORRUPT DATA SAFEGUARD ---
-        # If any movie in the history or selected list has an ID that doesn't exist, ignore it.
         max_idx = len(engine.tmdb_df) - 1
         if watch_history:
             watch_history = [m for m in watch_history if 0 <= int(m.get("index", -1)) <= max_idx]
         selected_movies = [m for m in selected_movies if 0 <= int(m.get("index", -1)) <= max_idx]
         
-        # If all selected movies were corrupted and removed, stop the engine from running on empty
         if not selected_movies:
-            return jsonify({"error": "The selected movies had corrupted IDs. Please search and select them again."}), 400
-        # ------------------------------------------
+            return jsonify({"error": "Corrupted IDs detected. Please re-search your movies.", "weight_info": ""}), 400
 
-        requested_k = data.get("top_k", TOP_K)
-        hide_adult = data.get("hide_adult", False)
+        # FIX: Force requested_k to be a pure integer to stop Python math crashes!
+        requested_k = int(data.get("top_k", TOP_K) or 10)
+        
+        # FIX: Safely parse hide_adult string
+        hide_adult = str(data.get("hide_adult", "false")).lower() == "true"
         
         recs_df, _ = engine.recommend(
             selected_movies,
@@ -237,7 +239,6 @@ def recommend():
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
 
-        # --- OPTIONAL ADULT FILTER ---
         if hide_adult and "adult" in recs_df.columns:
             recs_df = recs_df[~recs_df["adult"].astype(str).str.lower().isin(["true", "1", "yes"])]
             
@@ -301,8 +302,12 @@ def recommend():
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Recommendation calculation failed: {e}")
-        # Send the exact Python error back to the frontend popup!
-        return jsonify({"error": f"Server Error: {str(e)}"}), 500
+        # THE MASTER FIX: Always send weight_info so JS never crashes on .replace()
+        # This guarantees the TRUE error message will show up on your screen!
+        return jsonify({
+            "error": f"Server Error: {str(e)}", 
+            "weight_info": ""
+        }), 500
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
