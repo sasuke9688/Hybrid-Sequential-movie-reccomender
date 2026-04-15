@@ -1,51 +1,3 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import pandas as pd
-import numpy as np
-
-# 1. The PyTorch Architecture (Must match your training script exactly)
-class DynamicHybridRecommender(nn.Module):
-    def __init__(self, num_users, num_items, content_feature_dim, latent_dim=100):
-        super(DynamicHybridRecommender, self).__init__()
-        self.user_emb = nn.Embedding(num_users, latent_dim)
-        self.item_emb = nn.Embedding(num_items, latent_dim, padding_idx=0)
-        self.content_mlp = nn.Sequential(
-            nn.Linear(content_feature_dim, latent_dim),
-            nn.ReLU(),
-            nn.LayerNorm(latent_dim),
-            nn.Linear(latent_dim, latent_dim)
-        )
-        self.seq_encoder = nn.GRU(latent_dim, latent_dim, batch_first=True)
-        self.gating_network = nn.Sequential(
-            nn.Linear(latent_dim, latent_dim // 2),
-            nn.ReLU(),
-            nn.Linear(latent_dim // 2, 3)
-        )
-
-    def forward(self, user_idx, item_idx, item_content_vector, user_history_seq):
-        u_cf = self.user_emb(user_idx)
-        v_cf = self.item_emb(item_idx)
-        score_cf = (u_cf * v_cf).sum(dim=1)
-        
-        v_cbf = self.content_mlp(item_content_vector)
-        score_cbf = (u_cf * v_cbf).sum(dim=1)
-        
-        history_embs = self.item_emb(user_history_seq)
-        _, h_n = self.seq_encoder(history_embs)
-        h_t = h_n[-1] 
-        score_seq = (h_t * v_cf).sum(dim=1)
-        
-        gate_logits = self.gating_network(h_t)
-        gate_weights = F.softmax(gate_logits, dim=1)
-        
-        w_cf  = gate_weights[:, 0]
-        w_cbf = gate_weights[:, 1]
-        w_seq = gate_weights[:, 2]
-        
-        final_score = (w_cf * score_cf) + (w_cbf * score_cbf) + (w_seq * score_seq)
-        return torch.sigmoid(final_score)
-
 # 2. The Recommendation Engine Interface
 class RecommendationEngine:
     def __init__(self, model, content_matrix, tmdb_df, mlb):
@@ -68,9 +20,9 @@ class RecommendationEngine:
         return []
 
     def recommend(self, selected_movies, top_k=10, watch_history=None, language_filter=None, genre_filters=None):
-        """Executes a PyTorch forward pass to generate hybrid recommendations."""
+        """Executes a PyTorch forward pass with extreme RAM optimization."""
         # Setup context
-        user_idx = torch.LongTensor([0]) # Default cold-start user
+        user_idx = torch.LongTensor([0]) 
         
         # Build sequence from history and selected movies
         seq_list = []
@@ -94,26 +46,48 @@ class RecommendationEngine:
         with torch.no_grad():
             scores = self.model(user_batch, all_item_indices, self.content_matrix[1:], seq_batch)
         
-        # Retrieve scores and map to Pandas dataframe
-        score_array = scores.numpy()
-        recs = self.tmdb_df.copy()
-        recs['hybrid_score'] = score_array
+        # 1. Flatten scores to a 1D NumPy array
+        score_array = scores.numpy().flatten()
 
-        # Filter out movies the user just selected or watched
-        exclude_indices = [m["index"] for m in selected_movies]
+        # 2. Identify movies to exclude (the ones the user just clicked/watched)
+        exclude_indices = set([m["index"] for m in selected_movies])
         if watch_history:
-            exclude_indices.extend([m["index"] for m in watch_history])
-        recs = recs.drop(exclude_indices, errors='ignore')
+            exclude_indices.update([m["index"] for m in watch_history])
 
-        # Apply Filters
-        if language_filter:
-            recs = recs[recs["original_language"] == language_filter]
-        if genre_filters:
-            for g in genre_filters:
-                recs = recs[recs["genres"].apply(lambda x: g in x if isinstance(x, list) else False)]
+        # 3. Mathematically sort the scores from highest to lowest (No Pandas copying!)
+        top_indices = np.argsort(score_array)[::-1]
 
-        # Return Top K
-        recs = recs.sort_values(by="hybrid_score", ascending=False).head(top_k)
-        
-        # We don't return dynamic weight info yet to keep the payload clean
-        return recs, {"info": "Powered by PyTorch Multi-Gate Architecture"}
+        # 4. Extract ONLY the winning movies that match the filters
+        final_recs = []
+        for idx in top_indices:
+            if len(final_recs) >= top_k:
+                break # Stop searching once we have enough movies
+                
+            if idx in exclude_indices:
+                continue
+
+            # Extract just this single row (Extremely RAM efficient)
+            row = self.tmdb_df.iloc[idx]
+
+            # Apply Language Filter
+            if language_filter and row.get("original_language") != language_filter:
+                continue
+
+            # Apply Genre Filter
+            if genre_filters:
+                row_genres = row.get("genres", [])
+                if not isinstance(row_genres, list):
+                    # Handle safely if it's a string
+                    row_genres = [g.strip() for g in str(row_genres).split(",")]
+                
+                # Check if all required genres exist in the movie's genres
+                if not all(g in row_genres for g in genre_filters):
+                    continue
+
+            # If it survives the filters, add it to our final list
+            rec_dict = row.to_dict()
+            rec_dict["hybrid_score"] = float(score_array[idx])
+            final_recs.append(rec_dict)
+
+        # Return just the small subset of winning movies
+        return pd.DataFrame(final_recs), {"info": "Powered by PyTorch (Memory-Optimized)"}
