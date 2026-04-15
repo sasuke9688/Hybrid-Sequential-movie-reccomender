@@ -183,11 +183,18 @@ def search_movies():
 
         results = []
         for row in response.data:
+            # Safely extract the year from the YYYY-MM-DD string
+            release_date = str(row.get("release_date", ""))
+            release_year = release_date.split("-")[0] if release_date and release_date != "nan" else "N/A"
+
             results.append({
                 "index": int(row.get("pandas_index", 0)), 
                 "title": row.get("title", "Unknown Title"),
-                "release_year": row.get("release_year", ""),
-                "genres": row.get("genres", "")
+                "release_year": release_year,
+                "genres": row.get("genres", ""),
+                "vote_average": row.get("vote_average", "N/A"),
+                "popularity": row.get("popularity", "N/A"),
+                "original_language": row.get("original_language", "N/A")
             })
         return jsonify({"results": results})
     except Exception as e:
@@ -213,6 +220,9 @@ def recommend():
             language_filter=data.get("language", "").strip() or None,
             genre_filters=_parse_genre_filters(data.get("genres", [])),
         )
+
+        # Scrub all 'NaN' values from the Pandas dataframe before JSON conversion
+        recs_df = recs_df.fillna("N/A")
 
         recommendations = recs_df.to_dict(orient="records")
         for rec in recommendations:
